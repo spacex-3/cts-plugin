@@ -40,19 +40,23 @@ type managementResource struct {
 }
 
 type statusView struct {
-	Proxy             string        `json:"proxy"`
-	AuthIDs           []string      `json:"auth_ids"`
-	Models            []string      `json:"models"`
-	IntervalSeconds   int           `json:"interval_seconds"`
-	TargetStateLength int           `json:"target_state_length"`
-	TTLSeconds        int           `json:"ttl_seconds"`
-	Inject            bool          `json:"inject"`
-	Harvest           bool          `json:"harvest"`
-	Probe             bool          `json:"probe"`
-	GlobalError       string        `json:"global_error,omitempty"`
-	States            []statusState `json:"states"`
-	Probes            []statusProbe `json:"probes"`
-	Auths             []statusAuth  `json:"auths"`
+	Proxy             string           `json:"proxy"`
+	AuthIDs           []string         `json:"auth_ids"`
+	Models            []string         `json:"models"`
+	IntervalSeconds   int              `json:"interval_seconds"`
+	TargetStateLength int              `json:"target_state_length"`
+	TTLSeconds        int              `json:"ttl_seconds"`
+	Inject            bool             `json:"inject"`
+	Harvest           bool             `json:"harvest"`
+	Probe             bool             `json:"probe"`
+	DirectProbe       bool             `json:"direct_probe"`
+	ShowStateValues   bool             `json:"show_state_values"`
+	ProbeLogLimit     int              `json:"probe_log_limit"`
+	GlobalError       string           `json:"global_error,omitempty"`
+	States            []statusState    `json:"states"`
+	Probes            []statusProbe    `json:"probes"`
+	ProbeLogs         []statusProbeLog `json:"probe_logs"`
+	Auths             []statusAuth     `json:"auths"`
 }
 
 type statusState struct {
@@ -62,6 +66,7 @@ type statusState struct {
 	AgeSeconds   int    `json:"age_seconds"`
 	RemainingTTL int    `json:"remaining_ttl_seconds"`
 	Source       string `json:"source"`
+	State        string `json:"state,omitempty"`
 }
 
 type statusProbe struct {
@@ -72,6 +77,20 @@ type statusProbe struct {
 	Accepted   bool   `json:"accepted"`
 	Source     string `json:"source,omitempty"`
 	AgeSeconds int    `json:"age_seconds"`
+}
+
+type statusProbeLog struct {
+	Time        string `json:"time"`
+	AgeSeconds  int    `json:"age_seconds"`
+	AuthID      string `json:"auth_id"`
+	Model       string `json:"model"`
+	Route       string `json:"route"`
+	Attempt     int    `json:"attempt"`
+	State       string `json:"state,omitempty"`
+	Length      int    `json:"length"`
+	TargetMatch bool   `json:"target_match"`
+	Cached      bool   `json:"cached"`
+	Error       string `json:"error,omitempty"`
 }
 
 type statusAuth struct {
@@ -140,6 +159,9 @@ func buildStatusView() statusView {
 		Inject:            cfg.injectEnabled(),
 		Harvest:           cfg.harvestEnabled(),
 		Probe:             cfg.probeEnabled(),
+		DirectProbe:       cfg.directProbeEnabled(),
+		ShowStateValues:   cfg.showStateValuesEnabled(),
+		ProbeLogLimit:     cfg.probeLogLimit(),
 		GlobalError:       snap.GlobalErr,
 	}
 	for _, entry := range snap.Entries {
@@ -150,6 +172,7 @@ func buildStatusView() statusView {
 			AgeSeconds:   durationSeconds(snap.Now.Sub(entry.StoredAt)),
 			RemainingTTL: durationSeconds(currentRuntime().cache.remaining(entry)),
 			Source:       entry.Source,
+			State:        visibleState(entry.State, cfg.showStateValuesEnabled()),
 		})
 	}
 	sort.Slice(view.States, func(i, j int) bool {
@@ -175,6 +198,22 @@ func buildStatusView() statusView {
 		}
 		return view.Probes[i].AuthID < view.Probes[j].AuthID
 	})
+	for i := len(snap.Logs) - 1; i >= 0; i-- {
+		entry := snap.Logs[i]
+		view.ProbeLogs = append(view.ProbeLogs, statusProbeLog{
+			Time:        entry.Time.Format(time.RFC3339),
+			AgeSeconds:  durationSeconds(snap.Now.Sub(entry.Time)),
+			AuthID:      entry.AuthID,
+			Model:       entry.Model,
+			Route:       entry.Route,
+			Attempt:     entry.Attempt,
+			State:       visibleState(entry.State, cfg.showStateValuesEnabled()),
+			Length:      entry.Length,
+			TargetMatch: entry.TargetMatch,
+			Cached:      entry.Cached,
+			Error:       entry.Error,
+		})
+	}
 	if files, errList := currentRuntime().host.AuthList(); errList != nil {
 		if view.GlobalError == "" {
 			view.GlobalError = errList.Error()
@@ -204,7 +243,7 @@ func buildStatusView() statusView {
 func renderStatusPage(view statusView, triggered bool) []byte {
 	var out bytes.Buffer
 	out.WriteString("<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Codex Turn State</title>")
-	out.WriteString("<style>body{font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;margin:2rem;line-height:1.45;color:#1f2933}table{border-collapse:collapse;width:100%;margin:1rem 0}th,td{border:1px solid #d1d5db;padding:.45rem .6rem;text-align:left}th{background:#f3f4f6}code{background:#f3f4f6;padding:.1rem .3rem;border-radius:6px}.error{color:#b42318}.ok{color:#067647}form{margin:1rem 0 0}</style>")
+	out.WriteString("<style>body{font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;margin:2rem;line-height:1.45;color:#1f2933}table{border-collapse:collapse;width:100%;margin:1rem 0}th,td{border:1px solid #d1d5db;padding:.45rem .6rem;text-align:left;vertical-align:top;word-break:break-word}th{background:#f3f4f6}code{background:#f3f4f6;padding:.1rem .3rem;border-radius:6px}.error{color:#b42318}.ok{color:#067647}form{margin:1rem 0 0}</style>")
 	out.WriteString("</head><body><main>")
 	out.WriteString("<h1>Codex Turn State</h1>")
 	if triggered {
@@ -225,6 +264,9 @@ func renderStatusPage(view statusView, triggered bool) []byte {
 	writeRow(&out, "inject", fmt.Sprintf("%t", view.Inject))
 	writeRow(&out, "harvest", fmt.Sprintf("%t", view.Harvest))
 	writeRow(&out, "probe", fmt.Sprintf("%t", view.Probe))
+	writeRow(&out, "direct_probe", fmt.Sprintf("%t", view.DirectProbe))
+	writeRow(&out, "show_state_values", fmt.Sprintf("%t", view.ShowStateValues))
+	writeRow(&out, "probe_log_limit", fmt.Sprintf("%d", view.ProbeLogLimit))
 	out.WriteString("</tbody></table>")
 	out.WriteString("<form method=\"post\"><button type=\"submit\">Probe now</button></form>")
 
@@ -232,7 +274,7 @@ func renderStatusPage(view statusView, triggered bool) []byte {
 	if len(view.States) == 0 {
 		out.WriteString("<p>No target-length states cached.</p>")
 	} else {
-		out.WriteString("<table><thead><tr><th>Auth</th><th>Model</th><th>Length</th><th>Age</th><th>TTL left</th><th>Source</th></tr></thead><tbody>")
+		out.WriteString("<table><thead><tr><th>Auth</th><th>Model</th><th>Length</th><th>Age</th><th>TTL left</th><th>Source</th><th>State</th></tr></thead><tbody>")
 		for _, entry := range view.States {
 			out.WriteString("<tr>")
 			writeCell(&out, entry.AuthID)
@@ -241,6 +283,7 @@ func renderStatusPage(view statusView, triggered bool) []byte {
 			writeCell(&out, formatDuration(time.Duration(entry.AgeSeconds)*time.Second))
 			writeCell(&out, formatDuration(time.Duration(entry.RemainingTTL)*time.Second))
 			writeCell(&out, entry.Source)
+			writeCell(&out, stateDisplay(entry.State, view.ShowStateValues))
 			out.WriteString("</tr>")
 		}
 		out.WriteString("</tbody></table>")
@@ -259,6 +302,33 @@ func renderStatusPage(view statusView, triggered bool) []byte {
 			writeCell(&out, fmt.Sprintf("%t", record.Accepted))
 			writeCell(&out, record.Source)
 			writeCell(&out, record.LastError)
+			out.WriteString("</tr>")
+		}
+		out.WriteString("</tbody></table>")
+	}
+
+	out.WriteString("<h2>Probe Attempt Log</h2>")
+	out.WriteString("<p><code>direct</code> is the optional no-proxy baseline; <code>proxy</code> contains every rotating-proxy attempt actually made. Direct baseline values are never cached.</p>")
+	if !view.ShowStateValues {
+		out.WriteString("<p>State values are hidden. Set <code>show_state_values: true</code> to display future values.</p>")
+	}
+	if len(view.ProbeLogs) == 0 {
+		out.WriteString("<p>No probe log entries yet.</p>")
+	} else {
+		out.WriteString("<table><thead><tr><th>Time</th><th>Age</th><th>Auth</th><th>Model</th><th>Route</th><th>Attempt</th><th>Length</th><th>Target match</th><th>Cached</th><th>State</th><th>Error</th></tr></thead><tbody>")
+		for _, entry := range view.ProbeLogs {
+			out.WriteString("<tr>")
+			writeCell(&out, entry.Time)
+			writeCell(&out, formatDuration(time.Duration(entry.AgeSeconds)*time.Second))
+			writeCell(&out, entry.AuthID)
+			writeCell(&out, entry.Model)
+			writeCell(&out, entry.Route)
+			writeCell(&out, fmt.Sprintf("%d", entry.Attempt))
+			writeCell(&out, fmt.Sprintf("%d", entry.Length))
+			writeCell(&out, fmt.Sprintf("%t", entry.TargetMatch))
+			writeCell(&out, fmt.Sprintf("%t", entry.Cached))
+			writeCell(&out, stateDisplay(entry.State, view.ShowStateValues))
+			writeCell(&out, entry.Error)
 			out.WriteString("</tr>")
 		}
 		out.WriteString("</tbody></table>")
@@ -283,6 +353,23 @@ func renderStatusPage(view statusView, triggered bool) []byte {
 	out.WriteString("<p>JSON: <code>?format=json</code></p>")
 	out.WriteString("</main></body></html>")
 	return out.Bytes()
+}
+
+func visibleState(state string, show bool) string {
+	if !show {
+		return ""
+	}
+	return state
+}
+
+func stateDisplay(state string, show bool) string {
+	if !show {
+		return "(hidden)"
+	}
+	if state == "" {
+		return "(none)"
+	}
+	return state
 }
 
 func writeRow(out *bytes.Buffer, key, value string) {

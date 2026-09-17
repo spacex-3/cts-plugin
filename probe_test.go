@@ -14,15 +14,17 @@ import (
 )
 
 type sequenceProbeTransport struct {
-	states []string
-	calls  int
+	states  []string
+	proxies []string
+	calls   int
 }
 
-func (t *sequenceProbeTransport) Do(_ context.Context, _ string, _ *http.Request) (*http.Response, error) {
+func (t *sequenceProbeTransport) Do(_ context.Context, proxyURL string, _ *http.Request) (*http.Response, error) {
 	if t.calls >= len(t.states) {
 		return nil, fmt.Errorf("unexpected probe call %d", t.calls+1)
 	}
 	state := t.states[t.calls]
+	t.proxies = append(t.proxies, proxyURL)
 	t.calls++
 	body := fmt.Sprintf("data: {\"type\":\"codex.response.metadata\",\"headers\":{\"x-codex-turn-state\":%q}}\n\n", state)
 	return &http.Response{
@@ -226,5 +228,71 @@ func TestListProbeTargetsDoesNotTreatLabelsAsAuthIDs(t *testing.T) {
 	}
 	if len(host.gets) != 0 {
 		t.Fatalf("auth gets = %v, want none", host.gets)
+	}
+}
+
+func TestDirectBaselineAndEveryProxyAttemptAreLogged(t *testing.T) {
+	probe := false
+	showState := true
+	transport := &sequenceProbeTransport{states: []string{"direct-state", "xx", "abc"}}
+	testRuntime := newRuntime()
+	testRuntime.config = normalizeConfig(pluginConfig{
+		TargetStateLength: 3,
+		MaxProbeAttempts:  2,
+		ProbeLogLimit:     10,
+		Probe:             &probe,
+		ShowStateValues:   &showState,
+	})
+	testRuntime.cache = newStateCache(time.Hour, 3, time.Now)
+	testRuntime.host = noopHost{}
+	testRuntime.transport = transport
+	target := probeTarget{
+		AuthID:  "auth-1",
+		Model:   "model-1",
+		Token:   "token",
+		BaseURL: "https://example.test/backend-api/codex",
+	}
+	cfg := testRuntime.configSnapshot()
+	testRuntime.probeDirectBaseline(context.Background(), target, cfg)
+	testRuntime.probeTarget(context.Background(), "socks5://user:pass@proxy.example:1080", target)
+
+	if got := transport.proxies; len(got) != 3 || got[0] != "" || got[1] == "" || got[2] == "" {
+		t.Fatalf("probe routes = %#v, want direct then two proxy attempts", got)
+	}
+	snap := testRuntime.snapshotStatus()
+	if len(snap.Logs) != 3 {
+		t.Fatalf("probe logs = %d, want 3", len(snap.Logs))
+	}
+	if snap.Logs[0].Route != "direct" || snap.Logs[0].State != "direct-state" || snap.Logs[0].Cached {
+		t.Fatalf("direct log = %#v", snap.Logs[0])
+	}
+	if snap.Logs[1].Route != "proxy" || snap.Logs[1].Attempt != 1 || snap.Logs[1].State != "xx" || snap.Logs[1].TargetMatch {
+		t.Fatalf("first proxy log = %#v", snap.Logs[1])
+	}
+	if snap.Logs[2].Route != "proxy" || snap.Logs[2].Attempt != 2 || snap.Logs[2].State != "abc" || !snap.Logs[2].TargetMatch || !snap.Logs[2].Cached {
+		t.Fatalf("second proxy log = %#v", snap.Logs[2])
+	}
+	entry, ok := testRuntime.cache.lookup(target.AuthID, target.Model)
+	if !ok || entry.State != "abc" {
+		t.Fatalf("cached entry = %#v, ok=%t", entry, ok)
+	}
+}
+
+func TestProbeLogHidesStateAndHonorsLimit(t *testing.T) {
+	probe := false
+	testRuntime := newRuntime()
+	testRuntime.config = normalizeConfig(pluginConfig{Probe: &probe, ProbeLogLimit: 2})
+	target := probeTarget{AuthID: "auth-1", Model: "model-1"}
+	for attempt, state := range []string{"one", "two", "three"} {
+		testRuntime.recordProbeAttempt(target, "proxy", attempt+1, state, true, false, "")
+	}
+	snap := testRuntime.snapshotStatus()
+	if len(snap.Logs) != 2 {
+		t.Fatalf("probe logs = %d, want 2", len(snap.Logs))
+	}
+	for _, entry := range snap.Logs {
+		if entry.State != "" {
+			t.Fatalf("hidden state was retained: %#v", entry)
+		}
 	}
 }

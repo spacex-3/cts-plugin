@@ -37,3 +37,20 @@ func TestPluginConfigDefaults(t *testing.T) {
 		t.Fatal("models should remain scoped to the default model list")
 	}
 }
+
+func TestProbeLogDefaultsAndClamp(t *testing.T) {
+	cfg := normalizeConfig(pluginConfig{})
+	if cfg.directProbeEnabled() {
+		t.Fatal("direct probe should default to disabled")
+	}
+	if cfg.showStateValuesEnabled() {
+		t.Fatal("state values should default to hidden")
+	}
+	if got := cfg.probeLogLimit(); got != defaultProbeLogLimit {
+		t.Fatalf("probe log limit = %d, want %d", got, defaultProbeLogLimit)
+	}
+	cfg = normalizeConfig(pluginConfig{ProbeLogLimit: maxProbeLogLimit + 1})
+	if got := cfg.probeLogLimit(); got != maxProbeLogLimit {
+		t.Fatalf("clamped probe log limit = %d, want %d", got, maxProbeLogLimit)
+	}
+}

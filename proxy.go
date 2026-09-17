@@ -14,10 +14,17 @@ func parseProxyURL(raw string) (string, error) {
 	if trimmed == "" {
 		return "", nil
 	}
-	if strings.Contains(trimmed, "://") {
+	if scheme, rest, ok := strings.Cut(trimmed, "://"); ok {
+		// Some proxy providers document scheme://host:port:user:password even
+		// though standard proxy URLs use scheme://user:password@host:port.
+		if !strings.Contains(rest, "@") {
+			if shorthand, errShorthand := buildProxyURL(scheme, rest); errShorthand == nil {
+				return shorthand, nil
+			}
+		}
 		setting, errParse := proxyutil.Parse(trimmed)
 		if errParse != nil {
-			return "", errParse
+			return "", fmt.Errorf("proxy must use scheme://user:password@host:port or scheme://host:port:user:password: %w", errParse)
 		}
 		if setting.Mode == proxyutil.ModeDirect {
 			return "direct", nil
@@ -27,22 +34,29 @@ func parseProxyURL(raw string) (string, error) {
 		}
 		return setting.URL.String(), nil
 	}
+	return buildProxyURL("http", trimmed)
+}
 
-	host, port, user, password, errSplit := splitHostPortUserPassword(trimmed)
+func buildProxyURL(scheme, raw string) (string, error) {
+	host, port, user, password, errSplit := splitHostPortUserPassword(raw)
 	if errSplit != nil {
 		return "", errSplit
 	}
 	parsed := &url.URL{
-		Scheme: "http",
+		Scheme: strings.ToLower(strings.TrimSpace(scheme)),
 		Host:   net.JoinHostPort(host, port),
 	}
 	if user != "" || password != "" {
 		parsed.User = url.UserPassword(user, password)
 	}
-	if _, errParse := proxyutil.Parse(parsed.String()); errParse != nil {
+	setting, errParse := proxyutil.Parse(parsed.String())
+	if errParse != nil {
 		return "", errParse
 	}
-	return parsed.String(), nil
+	if setting.Mode != proxyutil.ModeProxy || setting.URL == nil {
+		return "", fmt.Errorf("unsupported proxy value %q", parsed.String())
+	}
+	return setting.URL.String(), nil
 }
 
 func splitHostPortUserPassword(raw string) (host, port, user, password string, err error) {

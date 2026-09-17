@@ -18,6 +18,9 @@ plugins:
       inject: true
       harvest: true
       probe: true
+      direct_probe: true
+      show_state_values: true
+      probe_log_limit: 200
       max_probe_attempts: 3
       max_output_tokens: 16
       prompt: "."

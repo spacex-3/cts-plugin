@@ -46,15 +46,26 @@ func (b *closeConnectionBody) Close() error {
 	return b.err
 }
 
-func newUTLSHTTPClient(proxyURL string) *http.Client {
+func newUTLSHTTPClient(proxyURL string) (*http.Client, error) {
 	var dialer proxy.Dialer = proxy.Direct
 	if proxyURL != "" {
 		proxyDialer, mode, errBuild := proxyutil.BuildDialer(proxyURL)
-		if errBuild == nil && mode != proxyutil.ModeInherit && proxyDialer != nil {
+		if errBuild != nil {
+			return nil, fmt.Errorf("build probe proxy: %w", errBuild)
+		}
+		switch mode {
+		case proxyutil.ModeDirect:
+			dialer = proxy.Direct
+		case proxyutil.ModeProxy:
+			if proxyDialer == nil {
+				return nil, errors.New("build probe proxy: empty proxy dialer")
+			}
 			dialer = proxyDialer
+		default:
+			return nil, errors.New("build probe proxy: inherited proxy mode is unsupported")
 		}
 	}
-	return &http.Client{Transport: &utlsRoundTripper{dialer: dialer}}
+	return &http.Client{Transport: &utlsRoundTripper{dialer: dialer}}, nil
 }
 
 func (t *utlsRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {

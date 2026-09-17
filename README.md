@@ -19,7 +19,7 @@ Then add the plugin configuration shown in [`config.example.yaml`](config.exampl
 
 ## What it does
 
-- Periodically sends a minimal streaming Codex request through a rotating proxy.
+- Optionally records a direct, no-proxy baseline and then sends minimal streaming Codex requests through a rotating proxy.
 - Uses a dedicated uTLS HTTP/2 connection for every probe attempt.
 - Stops reading and closes the connection immediately after finding turn-state metadata.
 - Accepts only states matching `target_state_length` (default: `292`).
@@ -52,6 +52,9 @@ plugins:
       inject: true
       harvest: true
       probe: true
+      direct_probe: true
+      show_state_values: true
+      probe_log_limit: 200
       max_probe_attempts: 3
       max_output_tokens: 16
       prompt: "."
@@ -59,7 +62,7 @@ plugins:
 
 ### Fields
 
-- `proxy`: rotating proxy endpoint. Supported forms are `host:port:user:password` and standard `http://`, `https://`, or `socks5://` URLs. Bracket IPv6 literals.
+- `proxy`: rotating proxy endpoint. Supports `host:port:user:password`, provider-style `socks5://host:port:user:password`, and standard `socks5://user:password@host:port` / HTTP(S) URLs. Credentials are URL-encoded internally; bracket IPv6 literals.
 - `auth_ids`: exact Codex runtime auth IDs. Empty permits every Codex auth visible to the host.
 - `models`: exact upstream model IDs. Defaults to `gpt-5.6-sol` and `gpt-6-astra`.
 - `interval_seconds`: delay after one full probe cycle finishes. Default: `300`.
@@ -68,6 +71,9 @@ plugins:
 - `inject`: inject fresh cached state into matching requests. Default: `true`.
 - `harvest`: collect matching state from normal Codex traffic. Default: `true`.
 - `probe`: run background probes. Default: `true`.
+- `direct_probe`: send one no-proxy baseline request before proxy attempts for each auth/model. The baseline is logged but never cached. Default: `false`.
+- `show_state_values`: display and retain future full state values in the status page/JSON probe log. Default: `false`; enable only on a protected management endpoint.
+- `probe_log_limit`: maximum in-memory attempt records. Default: `200`, maximum: `1000`.
 - `max_probe_attempts`: attempts per auth/model in one cycle. Default: `3`.
 - `max_output_tokens`: probe output limit. Default: `16`.
 - `prompt`: minimal probe input. Default: `.`.
@@ -97,7 +103,7 @@ The plugin registers:
 - `GET .../status?format=json`: JSON status.
 - `POST .../status` or `GET .../status?op=probe`: queue an immediate probe cycle.
 
-The status output does not expose proxy credentials, access tokens, or state values.
+Proxy credentials and access tokens are never displayed. Full state values are displayed only when `show_state_values: true`; existing records captured while it was disabled remain hidden.
 
 ## Build locally
 

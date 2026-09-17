@@ -21,7 +21,10 @@ type probeTransport interface {
 type utlsProbeTransport struct{}
 
 func (utlsProbeTransport) Do(_ context.Context, proxyURL string, req *http.Request) (*http.Response, error) {
-	client := newUTLSHTTPClient(strings.TrimSpace(proxyURL))
+	client, errClient := newUTLSHTTPClient(strings.TrimSpace(proxyURL))
+	if errClient != nil {
+		return nil, errClient
+	}
 	return client.Do(req)
 }
 
@@ -110,8 +113,32 @@ func (rt *pluginRuntime) probeAll(ctx context.Context) {
 		if errCtx := ctx.Err(); errCtx != nil {
 			return
 		}
+		if cfg.directProbeEnabled() {
+			rt.probeDirectBaseline(ctx, target, cfg)
+		}
 		rt.probeTarget(ctx, proxyURL, target)
 	}
+}
+
+func (rt *pluginRuntime) probeDirectBaseline(ctx context.Context, target probeTarget, cfg pluginConfig) {
+	state, errProbe := rt.probeOnce(ctx, "", target, cfg)
+	if errProbe != nil {
+		rt.recordProbeAttempt(target, "direct", 0, "", false, false, errProbe.Error())
+		rt.host.Log("info", "codex-turn-state: direct baseline probe failed", map[string]any{
+			"auth_id": target.AuthID,
+			"model":   target.Model,
+			"error":   errProbe.Error(),
+		})
+		return
+	}
+	targetMatch := len(strings.TrimSpace(state)) == cfg.targetLength()
+	rt.recordProbeAttempt(target, "direct", 0, state, targetMatch, false, "")
+	rt.host.Log("info", "codex-turn-state: direct baseline observed", map[string]any{
+		"auth_id":      target.AuthID,
+		"model":        target.Model,
+		"length":       len(strings.TrimSpace(state)),
+		"target_match": targetMatch,
+	})
 }
 
 func (rt *pluginRuntime) probeTarget(ctx context.Context, proxyURL string, target probeTarget) {
@@ -126,10 +153,12 @@ func (rt *pluginRuntime) probeTarget(ctx context.Context, proxyURL string, targe
 		if errProbe != nil {
 			lastErr = errProbe
 			rt.recordProbe(target, "", false, errProbe.Error())
+			rt.recordProbeAttempt(target, "proxy", attempt, "", false, false, errProbe.Error())
 			continue
 		}
 		accepted := rt.observeState(target.AuthID, target.Model, state, "probe")
 		if accepted {
+			rt.recordProbeAttempt(target, "proxy", attempt, state, true, true, "")
 			rt.recordProbe(target, state, true, "")
 			rt.host.Log("info", "codex-turn-state: captured target turn state", map[string]any{
 				"auth_id": target.AuthID,
@@ -139,6 +168,7 @@ func (rt *pluginRuntime) probeTarget(ctx context.Context, proxyURL string, targe
 			return
 		}
 		lastErr = fmt.Errorf("turn state length %d does not match target %d", len(strings.TrimSpace(state)), cfg.targetLength())
+		rt.recordProbeAttempt(target, "proxy", attempt, state, false, false, lastErr.Error())
 		rt.recordProbe(target, state, false, lastErr.Error())
 		rt.host.Log("info", "codex-turn-state: probe turn state rejected", map[string]any{
 			"auth_id": target.AuthID,

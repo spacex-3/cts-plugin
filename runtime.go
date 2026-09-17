@@ -12,6 +12,7 @@ type pluginRuntime struct {
 	config    pluginConfig
 	cache     *stateCache
 	statuses  map[cacheKey]probeRecord
+	probeLogs []probeLogEntry
 	globalErr string
 	host      hostAPI
 	transport probeTransport
@@ -19,6 +20,19 @@ type pluginRuntime struct {
 	trigger   chan struct{}
 	cancel    context.CancelFunc
 	wg        sync.WaitGroup
+}
+
+type probeLogEntry struct {
+	Time        time.Time
+	AuthID      string
+	Model       string
+	Route       string
+	Attempt     int
+	State       string
+	Length      int
+	TargetMatch bool
+	Cached      bool
+	Error       string
 }
 
 var rt = newRuntime()
@@ -80,6 +94,15 @@ func (r *pluginRuntime) applyConfig(cfg pluginConfig) error {
 	}
 	if r.statuses == nil {
 		r.statuses = make(map[cacheKey]probeRecord)
+	}
+
+	if len(r.probeLogs) > cfg.probeLogLimit() {
+		r.probeLogs = append([]probeLogEntry(nil), r.probeLogs[len(r.probeLogs)-cfg.probeLogLimit():]...)
+	}
+	if !cfg.showStateValuesEnabled() {
+		for i := range r.probeLogs {
+			r.probeLogs[i].State = ""
+		}
 	}
 	r.globalErr = ""
 	r.startProbeLocked()
@@ -153,6 +176,34 @@ func (r *pluginRuntime) recordObservation(authID, model, state string, accepted 
 	r.statuses[key] = record
 }
 
+func (r *pluginRuntime) recordProbeAttempt(target probeTarget, route string, attempt int, state string, targetMatch, cached bool, errText string) {
+	if r == nil {
+		return
+	}
+	state = strings.TrimSpace(state)
+	entry := probeLogEntry{
+		Time:        r.now(),
+		AuthID:      strings.TrimSpace(target.AuthID),
+		Model:       strings.TrimSpace(target.Model),
+		Route:       strings.TrimSpace(route),
+		Attempt:     attempt,
+		Length:      len(state),
+		TargetMatch: targetMatch,
+		Cached:      cached,
+		Error:       strings.TrimSpace(errText),
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.config.showStateValuesEnabled() {
+		entry.State = state
+	}
+	r.probeLogs = append(r.probeLogs, entry)
+	limit := r.config.probeLogLimit()
+	if len(r.probeLogs) > limit {
+		r.probeLogs = append([]probeLogEntry(nil), r.probeLogs[len(r.probeLogs)-limit:]...)
+	}
+}
+
 func (r *pluginRuntime) setGlobalProbeError(errText string) {
 	if r == nil {
 		return
@@ -173,6 +224,7 @@ func (r *pluginRuntime) snapshotStatus() runtimeSnapshot {
 	for _, record := range r.statuses {
 		records = append(records, record)
 	}
+	logs := append([]probeLogEntry(nil), r.probeLogs...)
 	r.mu.Unlock()
 	entries := r.cache.snapshot()
 	return runtimeSnapshot{
@@ -180,6 +232,7 @@ func (r *pluginRuntime) snapshotStatus() runtimeSnapshot {
 		GlobalErr: globalErr,
 		Entries:   entries,
 		Records:   records,
+		Logs:      logs,
 		Now:       r.now(),
 		TTL:       cfg.ttl(),
 		TargetLen: cfg.targetLength(),
@@ -191,6 +244,7 @@ type runtimeSnapshot struct {
 	GlobalErr string
 	Entries   []cacheEntry
 	Records   []probeRecord
+	Logs      []probeLogEntry
 	Now       time.Time
 	TTL       time.Duration
 	TargetLen int

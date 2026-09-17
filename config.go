@@ -16,6 +16,8 @@ const (
 	defaultTTLSeconds        = 3600
 	defaultMaxProbeAttempts  = 3
 	defaultMaxOutputTokens   = 16
+	defaultProbeLogLimit     = 200
+	maxProbeLogLimit         = 1000
 	defaultProbePrompt       = "."
 
 	codexUserAgent  = "codex-tui/0.154.0 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.154.0)"
@@ -26,7 +28,7 @@ const (
 )
 
 var (
-	pluginVersion      = "0.1.0"
+	pluginVersion      = "0.2.0"
 	defaultProbeModels = []string{"gpt-5.6-sol", "gpt-6-astra"}
 )
 
@@ -40,6 +42,9 @@ type pluginConfig struct {
 	Inject            *bool    `yaml:"inject"`
 	Harvest           *bool    `yaml:"harvest"`
 	Probe             *bool    `yaml:"probe"`
+	DirectProbe       *bool    `yaml:"direct_probe"`
+	ShowStateValues   *bool    `yaml:"show_state_values"`
+	ProbeLogLimit     int      `yaml:"probe_log_limit"`
 	MaxProbeAttempts  int      `yaml:"max_probe_attempts"`
 	MaxOutputTokens   int      `yaml:"max_output_tokens"`
 	Prompt            string   `yaml:"prompt"`
@@ -55,6 +60,24 @@ func (c pluginConfig) harvestEnabled() bool {
 
 func (c pluginConfig) probeEnabled() bool {
 	return c.Probe == nil || *c.Probe
+}
+
+func (c pluginConfig) directProbeEnabled() bool {
+	return c.DirectProbe != nil && *c.DirectProbe
+}
+
+func (c pluginConfig) showStateValuesEnabled() bool {
+	return c.ShowStateValues != nil && *c.ShowStateValues
+}
+
+func (c pluginConfig) probeLogLimit() int {
+	if c.ProbeLogLimit <= 0 {
+		return defaultProbeLogLimit
+	}
+	if c.ProbeLogLimit > maxProbeLogLimit {
+		return maxProbeLogLimit
+	}
+	return c.ProbeLogLimit
 }
 
 func (c pluginConfig) interval() time.Duration {
@@ -152,6 +175,12 @@ func normalizeConfig(cfg pluginConfig) pluginConfig {
 	}
 	if cfg.TTLSeconds < 0 {
 		cfg.TTLSeconds = 0
+	}
+	if cfg.ProbeLogLimit < 0 {
+		cfg.ProbeLogLimit = 0
+	}
+	if cfg.ProbeLogLimit > maxProbeLogLimit {
+		cfg.ProbeLogLimit = maxProbeLogLimit
 	}
 	if cfg.MaxProbeAttempts < 0 {
 		cfg.MaxProbeAttempts = 0
