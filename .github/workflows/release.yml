@@ -1,0 +1,162 @@
+name: Build and release
+
+on:
+  push:
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Format, race tests, vet, and registry
+        run: |
+          set -euo pipefail
+          test -z "$(gofmt -l .)"
+          go test -race ./...
+          go vet ./...
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          registry = json.loads(Path('registry.json').read_text())
+          assert registry['schema_version'] == 1
+          plugin = registry['plugins'][0]
+          assert plugin['id'] == 'codex-turn-state'
+          assert plugin['repository'] == 'https://github.com/spacex-3/cts-plugin'
+          assert plugin['install']['type'] == 'github-release'
+          PY
+
+  build:
+    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+    needs: test
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {goos: linux, goarch: amd64, runner: ubuntu-22.04, ext: so}
+          - {goos: linux, goarch: arm64, runner: ubuntu-24.04-arm, ext: so}
+          - {goos: darwin, goarch: amd64, runner: macos-15-intel, ext: dylib}
+          - {goos: darwin, goarch: arm64, runner: macos-15, ext: dylib}
+          - {goos: windows, goarch: amd64, runner: windows-2025, ext: dll}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Resolve version
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then version="${GITHUB_REF_NAME#v}"; else version=0.0.0-dev; fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      - name: Test and build native library
+        run: |
+          set -euo pipefail
+          go test ./...
+          mkdir -p dist
+          CGO_ENABLED=1 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
+            go build -trimpath -buildvcs=false -buildmode=c-shared \
+            -ldflags "-s -w -X main.pluginVersion=${VERSION}" \
+            -o dist/codex-turn-state.${{ matrix.ext }} .
+          python scripts/package.py --version "$VERSION" --goos ${{ matrix.goos }} --goarch ${{ matrix.goarch }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plugin-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: |
+            dist/codex-turn-state_*.zip
+            dist/codex-turn-state_*.zip.sha256
+          if-no-files-found: error
+
+  build-windows-arm64:
+    name: Build windows/arm64
+    needs: test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Resolve version
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then version="${GITHUB_REF_NAME#v}"; else version=0.0.0-dev; fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      - name: Build native ARM64 DLL
+        uses: go-cross/cgo-actions@d0b8f2f2d67923ce9a42d92a7ef0ed1ebd905f0a
+        env:
+          GOFLAGS: -trimpath -buildmode=c-shared -buildvcs=false
+        with:
+          dir: .
+          packages: .
+          targets: windows-arm64
+          out-dir: dist/windows-arm64
+          output: codex-turn-state.dll
+          flags: -ldflags=-s -w -X main.pluginVersion=${{ env.VERSION }}
+      - name: Package library
+        run: python3 scripts/package.py --version "$VERSION" --goos windows --goarch arm64 --library dist/windows-arm64/codex-turn-state.dll
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plugin-windows-arm64
+          path: |
+            dist/codex-turn-state_*.zip
+            dist/codex-turn-state_*.zip.sha256
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build, build-windows-arm64]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: plugin-*
+          merge-multiple: true
+      - name: Verify release set
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          from pathlib import Path
+          import zipfile
+          dist = Path('dist')
+          archives = sorted(dist.glob('*.zip'))
+          assert len(archives) == 6, 'expected six platform builds'
+          lines = []
+          for archive in archives:
+              expected = archive.with_suffix('.zip.sha256').read_text().split()[0]
+              digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+              assert digest == expected, archive.name
+              with zipfile.ZipFile(archive) as z:
+                  assert z.testzip() is None
+                  assert any(n.startswith('codex-turn-state.') for n in z.namelist())
+              lines.append(f'{digest}  {archive.name}\n')
+          (dist / 'checksums.txt').write_text(''.join(lines))
+          PY
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/*.zip dist/checksums.txt \
+            --verify-tag --title "Codex Turn State Probe $GITHUB_REF_NAME" --notes-file .github/release-notes.md
