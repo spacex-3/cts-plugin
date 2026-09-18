@@ -36,3 +36,16 @@ func TestStateCacheReconfigureDropsWrongLength(t *testing.T) {
 		t.Fatal("state with the old target length should be removed")
 	}
 }
+
+func TestStateCachePutManualAcceptsArbitraryLength(t *testing.T) {
+	now := time.Date(2026, time.September, 18, 12, 0, 0, 0, time.UTC)
+	cache := newStateCache(time.Hour, 292, func() time.Time { return now })
+	entry, ok := cache.putManual("auth-1", "model-1", "manual-state-value")
+	if !ok || entry.Length != len("manual-state-value") {
+		t.Fatalf("manual entry = %#v, ok=%t", entry, ok)
+	}
+	got, okLookup := cache.lookup("auth-1", "model-1")
+	if !okLookup || got.State != "manual-state-value" {
+		t.Fatalf("manual lookup = %#v, ok=%t", got, okLookup)
+	}
+}

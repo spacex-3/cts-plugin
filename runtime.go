@@ -204,6 +204,27 @@ func (r *pluginRuntime) applyProxyLines(raw, scheme string) error {
 	return nil
 }
 
+func (r *pluginRuntime) applyManualState(authID, model, state string) error {
+	authID = strings.TrimSpace(authID)
+	model = strings.TrimSpace(model)
+	state = strings.TrimSpace(state)
+	if authID == "" || model == "" || state == "" {
+		return errors.New("账号、模型和 state 都不能为空")
+	}
+	if !r.configSnapshot().allows(authID, model) {
+		return errors.New("账号或模型不在当前配置范围内")
+	}
+	entry, ok := r.cache.putManual(authID, model, state)
+	if !ok {
+		return errors.New("手动 state 写入失败")
+	}
+	r.mu.Lock()
+	r.windows[makeCacheKey(authID, model)] = windowStats{WindowStartedAt: entry.StoredAt}
+	r.mu.Unlock()
+	r.recordObservation(authID, model, state, true, "manual", "")
+	return nil
+}
+
 func (r *pluginRuntime) shutdown() {
 	r.mu.Lock()
 	r.stopProbeLocked()

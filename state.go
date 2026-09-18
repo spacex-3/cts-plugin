@@ -115,6 +115,31 @@ func (c *stateCache) storeTarget(authID, model, state, source string, refresh bo
 	return entry, true, !exists || current.State != state || refresh
 }
 
+func (c *stateCache) putManual(authID, model, state string) (cacheEntry, bool) {
+	if c == nil {
+		return cacheEntry{}, false
+	}
+	authID = strings.TrimSpace(authID)
+	model = strings.TrimSpace(model)
+	state = strings.TrimSpace(state)
+	if authID == "" || model == "" || state == "" {
+		return cacheEntry{}, false
+	}
+	key := cacheKey{AuthID: authID, Model: model}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry := cacheEntry{
+		AuthID:   authID,
+		Model:    model,
+		State:    state,
+		Length:   len(state),
+		StoredAt: c.nowLocked(),
+		Source:   "manual",
+	}
+	c.entries[key] = entry
+	return entry, true
+}
+
 func (c *stateCache) lookup(authID, model string) (cacheEntry, bool) {
 	if c == nil {
 		return cacheEntry{}, false

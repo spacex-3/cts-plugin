@@ -190,6 +190,23 @@ func handleManagement(raw []byte) ([]byte, error) {
 		}
 		return okEnvelope(map[string]any{"ok": true})
 	}
+	if op == "save_manual_state" {
+		form := req.Query
+		authID := strings.TrimSpace(form.Get("auth_id"))
+		model := strings.TrimSpace(form.Get("model"))
+		state := strings.TrimSpace(form.Get("state"))
+		if authID == "" && len(req.Body) > 0 {
+			if values, errValues := url.ParseQuery(string(req.Body)); errValues == nil {
+				authID = values.Get("auth_id")
+				model = values.Get("model")
+				state = values.Get("state")
+			}
+		}
+		if errSave := currentRuntime().applyManualState(authID, model, state); errSave != nil {
+			return nil, errSave
+		}
+		return okEnvelope(map[string]any{"ok": true})
+	}
 	view := buildStatusView()
 	if strings.EqualFold(strings.TrimSpace(req.Query.Get("format")), "json") {
 		body, errMarshal := json.MarshalIndent(view, "", "  ")
@@ -396,6 +413,7 @@ func renderStatusPage(view statusView, triggered bool) []byte {
 	out.WriteString(".banner{border-left:4px solid var(--red);background:var(--red-bg);color:var(--red);padding:8px 12px;border-radius:4px;margin:12px 0}")
 	out.WriteString(".toolbar{display:flex;align-items:center;gap:8px;margin:14px 0 2px}")
 	out.WriteString(".proxy-editor{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin:8px 0}.proxy-editor summary{cursor:pointer;color:var(--blue);font-size:12.5px;font-weight:700}.proxy-editor textarea{display:block;width:100%;min-height:110px;margin:8px 0;padding:8px;font:12px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;border:1px solid var(--line);border-radius:6px;resize:vertical}.proxy-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.proxy-actions select{padding:5px 8px;border:1px solid var(--line);border-radius:6px}")
+	out.WriteString(".manual-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px;margin:8px 0}.manual-grid select{width:100%;padding:5px 8px;border:1px solid var(--line);border-radius:6px}")
 	out.WriteString(".chips{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0}.chip{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:11.5px}")
 	out.WriteString(".account-row{vertical-align:top}.account-name{font-weight:700;font-size:12.5px}.swatch{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;background:var(--accent,#94a3b8)}")
 	out.WriteString(".account-models{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:6px}.account-model{background:#f8fafc;border:1px solid #edf0f3;border-radius:6px;padding:6px 7px}")
@@ -411,6 +429,23 @@ func renderStatusPage(view statusView, triggered bool) []byte {
 	out.WriteString("<header><h1><span class=\"dot\"></span>Codex Turn State</h1></header>")
 	out.WriteString("<main>")
 	out.WriteString("<div class=\"toolbar\"><button type=\"button\" id=\"probe-now\">立即探测</button><button type=\"button\" id=\"refresh-now\" class=\"secondary\">刷新页面</button><span id=\"probe-status\" class=\"muted\" aria-live=\"polite\"></span></div>")
+	out.WriteString("<details class=\"proxy-editor\"><summary>手动注入 state</summary><div class=\"manual-grid\"><label>账号 <select id=\"manual-auth\">")
+	for _, auth := range view.Auths {
+		out.WriteString("<option value=\"")
+		out.WriteString(html.EscapeString(auth.ID))
+		out.WriteString("\">")
+		out.WriteString(html.EscapeString(firstNonEmpty(auth.Label, auth.Email, auth.Name, auth.ID)))
+		out.WriteString("</option>")
+	}
+	out.WriteString("</select></label><label>模型 <select id=\"manual-model\">")
+	for _, model := range view.Models {
+		out.WriteString("<option value=\"")
+		out.WriteString(html.EscapeString(model))
+		out.WriteString("\">")
+		out.WriteString(html.EscapeString(model))
+		out.WriteString("</option>")
+	}
+	out.WriteString("</select></label></div><textarea id=\"manual-state\" rows=\"4\" spellcheck=\"false\" placeholder=\"粘贴不降智的 x-codex-turn-state 原文\"></textarea><div class=\"proxy-actions\"><button type=\"button\" id=\"save-manual-state\">保存并启用</button><span id=\"manual-status\" class=\"muted\" aria-live=\"polite\"></span></div></details>")
 	out.WriteString("<details class=\"proxy-editor\"><summary>代理池粘贴</summary><textarea id=\"proxy-lines\" rows=\"6\" spellcheck=\"false\" placeholder=\"每行一个：host:port:user:password\"></textarea><div class=\"proxy-actions\"><label>默认协议 <select id=\"proxy-scheme\">")
 	out.WriteString("<option value=\"socks5\">socks5</option><option value=\"http\">http</option><option value=\"https\">https</option><option value=\"socks5h\">socks5h</option>")
 	out.WriteString("</select></label><button type=\"button\" id=\"save-proxies\">保存代理池</button><span id=\"proxy-status\" class=\"muted\" aria-live=\"polite\"></span></div></details>")
@@ -553,6 +588,7 @@ func renderStatusPage(view statusView, triggered bool) []byte {
 	out.WriteString("var refreshBtn=document.getElementById('refresh-now');if(refreshBtn){refreshBtn.addEventListener('click',function(){location.reload();});}")
 	out.WriteString("var probeBtn=document.getElementById('probe-now'),probeStatus=document.getElementById('probe-status');if(probeBtn){probeBtn.addEventListener('click',function(){probeBtn.disabled=true;probeStatus.textContent='正在触发探测...';fetch(location.pathname+'?op=probe',{method:'GET'}).then(function(){probeStatus.textContent='已触发一轮探测，结果稍后刷新可见。';setTimeout(function(){probeBtn.disabled=false;},600);}).catch(function(){probeStatus.textContent='触发失败，请重试。';probeBtn.disabled=false;});});}")
 	out.WriteString("var saveBtn=document.getElementById('save-proxies'),proxyLines=document.getElementById('proxy-lines'),proxyScheme=document.getElementById('proxy-scheme'),proxyStatus=document.getElementById('proxy-status');if(saveBtn){saveBtn.addEventListener('click',function(){saveBtn.disabled=true;proxyStatus.textContent='正在保存...';fetch(location.pathname+'?op=save_proxies&scheme='+encodeURIComponent(proxyScheme.value),{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'proxy_lines='+encodeURIComponent(proxyLines.value)}).then(function(r){return r.json().catch(function(){return{};});}).then(function(d){if(d&&d.ok){proxyStatus.textContent='已保存，开始探测。';}else{proxyStatus.textContent='保存失败，请检查格式。';}}).catch(function(){proxyStatus.textContent='保存失败，请重试。';}).finally(function(){saveBtn.disabled=false;});});}")
+	out.WriteString("var manualSaveBtn=document.getElementById('save-manual-state'),manualAuth=document.getElementById('manual-auth'),manualModel=document.getElementById('manual-model'),manualState=document.getElementById('manual-state'),manualStatus=document.getElementById('manual-status');if(manualSaveBtn){manualSaveBtn.addEventListener('click',function(){if(!manualState.value.trim()){manualStatus.textContent='请粘贴 state。';return;}manualSaveBtn.disabled=true;manualStatus.textContent='正在保存...';fetch(location.pathname+'?op=save_manual_state',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'auth_id='+encodeURIComponent(manualAuth.value)+'&model='+encodeURIComponent(manualModel.value)+'&state='+encodeURIComponent(manualState.value)}).then(function(r){return r.json().catch(function(){return{};});}).then(function(d){manualStatus.textContent=d&&d.ok?'已保存并启用。':'保存失败，请检查账号/模型。';}).catch(function(){manualStatus.textContent='保存失败，请重试。';}).finally(function(){manualSaveBtn.disabled=false;});});}")
 	out.WriteString("var accountSaveBtn=document.getElementById('save-probe-accounts'),selectAll=document.getElementById('probe-select-all'),accountStatus=document.getElementById('probe-account-status');if(selectAll){selectAll.addEventListener('change',function(){document.querySelectorAll('.probe-account').forEach(function(el){el.checked=selectAll.checked;});});}if(accountSaveBtn){accountSaveBtn.addEventListener('click',function(){var ids=Array.from(document.querySelectorAll('.probe-account:checked')).map(function(el){return el.dataset.auth;});accountSaveBtn.disabled=true;if(accountStatus)accountStatus.textContent='正在保存...';fetch(location.pathname+'?op=save_probe_accounts',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'auth_ids='+encodeURIComponent(ids.join(','))}).then(function(r){return r.json().catch(function(){return{};});}).then(function(d){if(accountStatus)accountStatus.textContent=d&&d.ok?'已保存，开始探测。':'保存失败。';}).catch(function(){if(accountStatus)accountStatus.textContent='保存失败，请重试。';}).finally(function(){accountSaveBtn.disabled=false;});});}")
 	out.WriteString("function fmt(left){if(left<=0)return '已过期';var h=Math.floor(left/3600),m=Math.floor((left%3600)/60),s=left%60;return (h>0?h+':':'')+String(m).padStart(2,'0')+':'+String(s).padStart(2,'0');}")
 	out.WriteString("function tick(){var now=Date.now();document.querySelectorAll('[data-countdown]').forEach(function(el){var ttl=Number(el.dataset.ttlSeconds||0);var left=Math.max(0,Math.ceil((Number(el.dataset.expiresAt)-now)/1000));el.textContent='倒计时 '+fmt(left);var bar=el.nextElementSibling.querySelector('i');if(bar){bar.style.width=(ttl>0?Math.min(100,left/ttl*100):0)+'%';}});}tick();setInterval(tick,1000);")

@@ -94,4 +94,7 @@ func TestRenderStatusPageProbeButtonDoesNotNavigate(t *testing.T) {
 	if !strings.Contains(page, `id="refresh-now"`) {
 		t.Fatal("status page should include an in-page refresh button")
 	}
+	if !strings.Contains(page, `id="manual-state"`) {
+		t.Fatal("status page should include manual state input")
+	}
 }
