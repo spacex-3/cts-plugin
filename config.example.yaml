@@ -6,11 +6,13 @@ plugins:
     codex-turn-state:
       enabled: true
       priority: 100
-      # 支持多行代理；未命中目标长度时自动轮询下一条。
+      # 兼容单行/多行字符串；建议使用下面的 proxies 列表，管理页更直观。
       proxy: "proxy.example:8080:username:password"
-      # proxy: |
-      #   proxy-one.example:8080:user:pass
-      #   socks5://proxy-two.example:10000:user:pass
+      # proxies:
+      #   - "proxy-one.example:8080:user:pass"
+      #   - "socks5://proxy-two.example:10000:user:pass"
+      # BestGo 这类 SOCKS5 节点，如果 proxies 条目不带协议前缀，请设为 socks5。
+      proxy_scheme: "http"
       auth_ids:
         - "codex-auth-id-1"
       models:

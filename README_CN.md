@@ -41,6 +41,7 @@ plugins:
       enabled: true
       priority: 100
       proxy: "proxy.example:8080:username:password"
+      proxy_scheme: "http"
       auth_ids:
         - "codex-auth-id-1"
       models:
@@ -63,6 +64,8 @@ plugins:
 ### 配置项
 
 - `proxy`：一个或多个轮换代理，每行一个。支持 `host:port:user:password`、代理商常见的 `socks5://host:port:user:password`，以及标准 `socks5://user:password@host:port` / HTTP(S) URL；凭据会在内部自动 URL 编码，IPv6 地址需要方括号。未命中目标长度时，下一次尝试自动轮询下一行代理。
+- `proxies`：推荐的多代理列表配置，每项一个代理；插件会把它和 `proxy` 合并。CPA 插件配置里的字符串输入框如果会把粘贴的多行显示成一行，就用这个列表字段。
+- `proxy_scheme`：`proxy`/`proxies` 条目未写协议前缀时采用的默认协议。可选 `http` 或 `socks5`；BestGo 这类 SOCKS5 节点必须选 `socks5`。默认 `http`。
 - `auth_ids`：精确的 Codex 运行时账号 ID。留空表示允许所有可见 Codex 账号。
 - `models`：精确的上游模型 ID。默认是 `gpt-5.6-sol`、`gpt-6-astra`。
 - `interval_seconds`：上一轮完整探测结束后，到下一轮的等待时间。默认 `300`。

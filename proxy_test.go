@@ -103,3 +103,28 @@ func TestParseProxyURLsReportsLineNumber(t *testing.T) {
 		t.Fatalf("error = %v, want line 2", errParse)
 	}
 }
+
+func TestParseProxyURLsUsesDefaultScheme(t *testing.T) {
+	got, errParse := parseProxyURLsWithScheme("us.rrp.bestgo.work:10000:user:pw\nproxy-two.example:1080:user:pw", "socks5")
+	if errParse != nil {
+		t.Fatal(errParse)
+	}
+	if len(got) != 2 || !strings.HasPrefix(got[0], "socks5://") || !strings.HasPrefix(got[1], "socks5://") {
+		t.Fatalf("proxies = %#v, want socks5 URLs", got)
+	}
+}
+
+func TestProxyLinesMergesLegacyStringAndArray(t *testing.T) {
+	cfg := normalizeConfig(pluginConfig{
+		Proxy:       "proxy-one.example:8080:user:pass",
+		Proxies:     []string{"proxy-two.example:1080:user:pass", "proxy-three.example:1090:user:pass"},
+		ProxyScheme: "socks5",
+	})
+	lines := cfg.proxyLines()
+	if len(lines) != 3 || lines[0] != "proxy-one.example:8080:user:pass" {
+		t.Fatalf("proxy lines = %#v", lines)
+	}
+	if errProxy := validateProxyConfig(cfg); errProxy != nil {
+		t.Fatal(errProxy)
+	}
+}

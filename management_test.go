@@ -82,3 +82,13 @@ func TestAccountColorIsStableAndDistinct(t *testing.T) {
 		t.Fatal("different accounts should get different colors")
 	}
 }
+
+func TestRenderStatusPageProbeButtonDoesNotNavigate(t *testing.T) {
+	page := string(renderStatusPage(statusView{}, false))
+	if !strings.Contains(page, `type="button"`) || !strings.Contains(page, `fetch(location.pathname+'?op=probe'`) {
+		t.Fatal("probe button should trigger a fetch instead of submitting a form")
+	}
+	if strings.Contains(page, `<form method="post"`) {
+		t.Fatal("probe button should not submit a form")
+	}
+}

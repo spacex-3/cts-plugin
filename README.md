@@ -41,6 +41,7 @@ plugins:
       enabled: true
       priority: 100
       proxy: "proxy.example:8080:username:password"
+      proxy_scheme: "http"
       auth_ids:
         - "codex-auth-id-1"
       models:
@@ -63,6 +64,8 @@ plugins:
 ### Fields
 
 - `proxy`: one or more rotating proxy endpoints, one per line. Supports `host:port:user:password`, provider-style `socks5://host:port:user:password`, and standard `socks5://user:password@host:port` / HTTP(S) URLs. Credentials are URL-encoded internally; bracket IPv6 literals. A nonmatching state advances to the next proxy on the following attempt.
+- `proxies`: recommended list form for multiple proxies, one item per entry. It is merged with `proxy`; use this in the CPA plugin config UI when the `proxy` string field collapses pasted newlines.
+- `proxy_scheme`: default protocol for `proxy`/`proxies` entries that omit a scheme. Choose `http` or `socks5`; the latter is required for SOCKS5-only providers such as BestGo. Default: `http`.
 - `auth_ids`: exact Codex runtime auth IDs. Empty permits every Codex auth visible to the host.
 - `models`: exact upstream model IDs. Defaults to `gpt-5.6-sol` and `gpt-6-astra`.
 - `interval_seconds`: delay after one full probe cycle finishes. Default: `300`.

@@ -97,7 +97,7 @@ func (r *pluginRuntime) configSnapshot() pluginConfig {
 
 func (r *pluginRuntime) applyConfig(cfg pluginConfig) error {
 	cfg = normalizeConfig(cfg)
-	if errProxy := validateProxyConfig(cfg.Proxy); errProxy != nil {
+	if errProxy := validateProxyConfig(cfg); errProxy != nil {
 		return errProxy
 	}
 	r.mu.Lock()

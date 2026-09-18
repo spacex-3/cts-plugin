@@ -10,6 +10,14 @@ import (
 )
 
 func parseProxyURLs(raw string) ([]string, error) {
+	return parseProxyURLsWithScheme(raw, "http")
+}
+
+func parseProxyURLsWithScheme(raw, defaultScheme string) ([]string, error) {
+	defaultScheme = strings.ToLower(strings.TrimSpace(defaultScheme))
+	if defaultScheme == "" {
+		defaultScheme = "http"
+	}
 	raw = strings.ReplaceAll(raw, "\r\n", "\n")
 	lines := strings.Split(raw, "\n")
 	proxies := make([]string, 0, len(lines))
@@ -17,7 +25,7 @@ func parseProxyURLs(raw string) ([]string, error) {
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
-		proxyURL, errParse := parseProxyURL(line)
+		proxyURL, errParse := parseProxyURLWithScheme(line, defaultScheme)
 		if errParse != nil {
 			return nil, fmt.Errorf("proxy line %d: %w", lineNumber+1, errParse)
 		}
@@ -29,6 +37,10 @@ func parseProxyURLs(raw string) ([]string, error) {
 }
 
 func parseProxyURL(raw string) (string, error) {
+	return parseProxyURLWithScheme(raw, "http")
+}
+
+func parseProxyURLWithScheme(raw, defaultScheme string) (string, error) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
 		return "", nil
@@ -53,7 +65,7 @@ func parseProxyURL(raw string) (string, error) {
 		}
 		return setting.URL.String(), nil
 	}
-	return buildProxyURL("http", trimmed)
+	return buildProxyURL(strings.ToLower(strings.TrimSpace(defaultScheme)), trimmed)
 }
 
 func buildProxyURL(scheme, raw string) (string, error) {

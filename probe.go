@@ -151,7 +151,7 @@ func (rt *pluginRuntime) prepareProbe(cfg pluginConfig) ([]probeTarget, []string
 		rt.setGlobalProbeError("no matching Codex credentials")
 		return nil, nil, false
 	}
-	proxies, errProxy := parseProxyURLs(cfg.Proxy)
+	proxies, errProxy := parseProxyURLsWithScheme(strings.Join(cfg.proxyLines(), "\n"), cfg.proxyScheme())
 	if errProxy != nil {
 		rt.host.Log("warn", "codex-turn-state: invalid probe proxy", map[string]any{"error": errProxy.Error()})
 		rt.setGlobalProbeError(errProxy.Error())

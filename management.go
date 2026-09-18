@@ -183,7 +183,7 @@ func buildStatusView() statusView {
 	if target <= 0 {
 		target = defaultTargetStateLength
 	}
-	proxies := redactedProxyList(cfg.Proxy)
+	proxies := redactedProxyList(cfg)
 	view := statusView{
 		Proxy:                   strings.Join(proxies, "\n"),
 		Proxies:                 proxies,
@@ -335,14 +335,15 @@ func renderStatusPage(view statusView, triggered bool) []byte {
 	out.WriteString("<style>")
 	out.WriteString(":root{--bg:#f6f7f9;--panel:#fff;--text:#1f2933;--muted:#68707d;--line:#e2e5ea;--green:#0a8f4d;--green-bg:#e7f6ef;--red:#c13a3a;--red-bg:#fdecec;--amber:#b7791f;--amber-bg:#fff4db;--blue:#2563eb;--blue-bg:#e9f0ff}")
 	out.WriteString("*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:12.5px/1.5 -apple-system,BlinkMacSystemFont,\"Segoe UI\",\"PingFang SC\",\"Microsoft YaHei\",sans-serif}")
-	out.WriteString("header{background:var(--panel);border-bottom:1px solid var(--line);padding:14px 20px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}")
+	out.WriteString("header{background:var(--panel);border-bottom:1px solid var(--line);padding:14px 20px;display:flex;align-items:center;justify-content:flex-start;gap:12px;flex-wrap:wrap}")
 	out.WriteString("h1{font-size:17px;margin:0;display:flex;align-items:center;gap:8px}.dot{width:10px;height:10px;border-radius:50%;background:var(--green);display:inline-block}")
 	out.WriteString("main{max-width:1280px;margin:0 auto;padding:16px 20px 36px}.section{margin:14px 0}.section-title{font-size:13px;font-weight:700;margin:0 0 8px;color:#323a46}")
-	out.WriteString("button{background:var(--blue);color:#fff;border:0;border-radius:6px;padding:6px 12px;font-size:12.5px;cursor:pointer}button:hover{background:#1d4fd7}")
+	out.WriteString("button{background:var(--blue);color:#fff;border:0;border-radius:6px;padding:6px 12px;font-size:12.5px;cursor:pointer}button:hover{background:#1d4fd7}button:disabled{opacity:.55;cursor:wait}")
 	out.WriteString("table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line)}th,td{border-bottom:1px solid var(--line);padding:6px 8px;text-align:left;vertical-align:top;word-break:break-word}th{background:#f0f2f5;font-weight:700;font-size:12px;position:sticky;top:0}")
 	out.WriteString("code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px}.pill{display:inline-flex;align-items:center;gap:4px;padding:1px 7px;border-radius:999px;font-size:11px;font-weight:700}")
 	out.WriteString(".ok{color:var(--green);background:var(--green-bg)}.bad{color:var(--red);background:var(--red-bg)}.warn{color:var(--amber);background:var(--amber-bg)}.info{color:var(--blue);background:var(--blue-bg)}.muted{color:var(--muted)}")
 	out.WriteString(".banner{border-left:4px solid var(--red);background:var(--red-bg);color:var(--red);padding:8px 12px;border-radius:4px;margin:12px 0}")
+	out.WriteString(".toolbar{display:flex;align-items:center;gap:8px;margin:14px 0 2px}")
 	out.WriteString(".chips{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0}.chip{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:11.5px}")
 	out.WriteString(".grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:12px}")
 	out.WriteString(".account{background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--accent,#94a3b8);border-radius:8px;overflow:hidden;min-width:0}")
@@ -357,9 +358,9 @@ func renderStatusPage(view statusView, triggered bool) []byte {
 	out.WriteString("@media(max-width:640px){.grid{grid-template-columns:1fr}main,header{padding-left:10px;padding-right:10px}}")
 	out.WriteString("</style></head><body>")
 
-	out.WriteString("<header><h1><span class=\"dot\"></span>Codex Turn State</h1>")
-	out.WriteString("<form method=\"post\"><button type=\"submit\">立即探测</button></form></header>")
+	out.WriteString("<header><h1><span class=\"dot\"></span>Codex Turn State</h1></header>")
 	out.WriteString("<main>")
+	out.WriteString("<div class=\"toolbar\"><button type=\"button\" id=\"probe-now\">立即探测</button><span id=\"probe-status\" class=\"muted\" aria-live=\"polite\"></span></div>")
 	if triggered {
 		out.WriteString("<div class=\"banner\" style=\"border-left-color:var(--green);background:var(--green-bg);color:var(--green)\">已触发一轮探测。</div>")
 	}
@@ -486,6 +487,7 @@ func renderStatusPage(view statusView, triggered bool) []byte {
 	out.WriteString("</div>")
 	out.WriteString("<p class=\"muted\">JSON: <code>?format=json</code></p>")
 	out.WriteString("<script>")
+	out.WriteString("var probeBtn=document.getElementById('probe-now'),probeStatus=document.getElementById('probe-status');if(probeBtn){probeBtn.addEventListener('click',function(){probeBtn.disabled=true;probeStatus.textContent='正在触发探测...';fetch(location.pathname+'?op=probe',{method:'GET'}).then(function(){probeStatus.textContent='已触发一轮探测，结果稍后刷新可见。';setTimeout(function(){probeBtn.disabled=false;},600);}).catch(function(){probeStatus.textContent='触发失败，请重试。';probeBtn.disabled=false;});});}")
 	out.WriteString("function fmt(left){if(left<=0)return '已过期';var h=Math.floor(left/3600),m=Math.floor((left%3600)/60),s=left%60;return (h>0?h+':':'')+String(m).padStart(2,'0')+':'+String(s).padStart(2,'0');}")
 	out.WriteString("function tick(){var now=Date.now();document.querySelectorAll('[data-countdown]').forEach(function(el){var ttl=Number(el.dataset.ttlSeconds||0);var left=Math.max(0,Math.ceil((Number(el.dataset.expiresAt)-now)/1000));el.textContent='倒计时 '+fmt(left);var bar=el.nextElementSibling.querySelector('i');if(bar){bar.style.width=(ttl>0?Math.min(100,left/ttl*100):0)+'%';}});}tick();setInterval(tick,1000);")
 	out.WriteString("</script>")
@@ -624,8 +626,8 @@ func redactedProxy(raw string) string {
 	return proxyutil.Redact(parsed)
 }
 
-func redactedProxyList(raw string) []string {
-	proxies, errParse := parseProxyURLs(raw)
+func redactedProxyList(cfg pluginConfig) []string {
+	proxies, errParse := parseProxyURLsWithScheme(strings.Join(cfg.proxyLines(), "\n"), cfg.proxyScheme())
 	if errParse != nil {
 		return []string{"(invalid)"}
 	}

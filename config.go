@@ -28,12 +28,14 @@ const (
 )
 
 var (
-	pluginVersion      = "0.3.0"
+	pluginVersion      = "0.3.1"
 	defaultProbeModels = []string{"gpt-5.6-sol", "gpt-6-astra"}
 )
 
 type pluginConfig struct {
 	Proxy                   string   `yaml:"proxy"`
+	Proxies                 []string `yaml:"proxies"`
+	ProxyScheme             string   `yaml:"proxy_scheme"`
 	AuthIDs                 []string `yaml:"auth_ids"`
 	Models                  []string `yaml:"models"`
 	IntervalSeconds         int      `yaml:"interval_seconds"`
@@ -109,6 +111,29 @@ func (c pluginConfig) maxAttempts() int {
 	return c.MaxProbeAttempts
 }
 
+func (c pluginConfig) proxyScheme() string {
+	scheme := strings.ToLower(strings.TrimSpace(c.ProxyScheme))
+	switch scheme {
+	case "http", "https", "socks5", "socks5h":
+		return scheme
+	default:
+		return "http"
+	}
+}
+
+func (c pluginConfig) proxyLines() []string {
+	lines := make([]string, 0, len(c.Proxies)+1)
+	if strings.TrimSpace(c.Proxy) != "" {
+		for _, line := range strings.Split(strings.ReplaceAll(c.Proxy, "\r\n", "\n"), "\n") {
+			if strings.TrimSpace(line) != "" {
+				lines = append(lines, strings.TrimSpace(line))
+			}
+		}
+	}
+	lines = append(lines, uniqueTrimmed(c.Proxies)...)
+	return lines
+}
+
 func (c pluginConfig) failureReprobeThreshold() int {
 	if c.FailureReprobeThreshold < 0 {
 		return 0
@@ -161,6 +186,7 @@ func (c pluginConfig) allows(authID, model string) bool {
 func clonePluginConfig(cfg pluginConfig) pluginConfig {
 	cfg.AuthIDs = append([]string(nil), cfg.AuthIDs...)
 	cfg.Models = append([]string(nil), cfg.Models...)
+	cfg.Proxies = append([]string(nil), cfg.Proxies...)
 	return cfg
 }
 
@@ -176,6 +202,8 @@ func containsFold(values []string, target string) bool {
 
 func normalizeConfig(cfg pluginConfig) pluginConfig {
 	cfg.Proxy = strings.TrimSpace(cfg.Proxy)
+	cfg.Proxies = uniqueTrimmed(cfg.Proxies)
+	cfg.ProxyScheme = strings.ToLower(strings.TrimSpace(cfg.ProxyScheme))
 	cfg.AuthIDs = uniqueTrimmed(cfg.AuthIDs)
 	cfg.Models = uniqueTrimmed(cfg.Models)
 	if cfg.IntervalSeconds < 0 {
@@ -239,7 +267,7 @@ func formatDuration(d time.Duration) string {
 	return d.String()
 }
 
-func validateProxyConfig(raw string) error {
-	_, errParse := parseProxyURLs(raw)
+func validateProxyConfig(cfg pluginConfig) error {
+	_, errParse := parseProxyURLsWithScheme(strings.Join(cfg.proxyLines(), "\n"), cfg.proxyScheme())
 	return errParse
 }
