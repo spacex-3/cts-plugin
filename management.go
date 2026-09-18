@@ -304,7 +304,7 @@ func buildStatusView() statusView {
 			AuthID:       entry.AuthID,
 			Model:        entry.Model,
 			Length:       entry.Length,
-			AgeSeconds:   durationSeconds(snap.Now.Sub(entry.StoredAt)),
+			AgeSeconds:   durationSeconds(snap.Now.Sub(entry.freshnessTime())),
 			RemainingTTL: 0,
 			Source:       entry.Source,
 			State:        visibleState(entry.State, cfg.showStateValuesEnabled()),
@@ -317,9 +317,9 @@ func buildStatusView() statusView {
 			AuthID:        entry.AuthID,
 			Model:         entry.Model,
 			Length:        entry.Length,
-			AgeSeconds:    durationSeconds(snap.Now.Sub(entry.StoredAt)),
-			RemainingTTL:  durationSeconds(snap.TTL - snap.Now.Sub(entry.StoredAt)),
-			ExpiresAtUnix: entry.StoredAt.Add(snap.TTL).Unix(),
+			AgeSeconds:    durationSeconds(snap.Now.Sub(entry.freshnessTime())),
+			RemainingTTL:  durationSeconds(snap.TTL - snap.Now.Sub(entry.freshnessTime())),
+			ExpiresAtUnix: entry.freshnessTime().Add(snap.TTL).Unix(),
 			Source:        entry.Source,
 			State:         visibleState(entry.State, cfg.showStateValuesEnabled()),
 		})
@@ -469,8 +469,8 @@ func buildAccountCards(auths []statusAuth, models []string, cfg pluginConfig, sn
 				modelCard.Length = entry.Length
 				modelCard.Source = entry.Source
 				modelCard.State = visibleState(entry.State, cfg.showStateValuesEnabled())
-				modelCard.ExpiresAtUnix = entry.StoredAt.Add(snap.TTL).Unix()
-				modelCard.RemainingTTLSeconds = durationSeconds(snap.TTL - snap.Now.Sub(entry.StoredAt))
+				modelCard.ExpiresAtUnix = entry.freshnessTime().Add(snap.TTL).Unix()
+				modelCard.RemainingTTLSeconds = durationSeconds(snap.TTL - snap.Now.Sub(entry.freshnessTime()))
 			}
 			account.Models = append(account.Models, modelCard)
 		}

@@ -23,6 +23,14 @@ plugins:
       interval_seconds: 1800
       probe_schedule: "fixed"
       probe_lead_seconds: 300
+      # 可选：probe_schedule: "on_demand"，空闲时不做定时/启动探测。
+      probe_wait_milliseconds: 1500
+      probe_timeout_seconds: 60
+      use_issued_at: false
+      require_completed: false
+      error_aware_backoff: false
+      quota_backoff_seconds: 900
+      rotate_proxy_start: false
       target_state_length: 292
       ttl_seconds: 3600
       inject: true

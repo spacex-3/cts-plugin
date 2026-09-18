@@ -134,3 +134,55 @@ Use `.dylib` on macOS, `.so` on Linux, or `.dll` on Windows. Release tags build 
 - A state of the expected length is still opaque upstream data; length does not guarantee validity or any routing/capacity outcome.
 
 This standalone repository is derived from the CLIProxyAPI `examples/plugin/codex-turn-state` implementation and retains the MIT license.
+
+### Optional request-driven lifecycle
+
+Existing `fixed` scheduling and legacy acceptance remain the defaults. To enable
+all lifecycle improvements, set these options in the plugin configuration:
+
+```yaml
+probe_schedule: on_demand
+probe_wait_milliseconds: 1500
+probe_timeout_seconds: 60
+use_issued_at: true
+require_completed: true
+error_aware_backoff: true
+quota_backoff_seconds: 900
+rotate_proxy_start: true
+```
+
+`on_demand` has no startup probe or periodic timer. An eligible business request
+probes only its selected account/model when state is missing or within
+`probe_lead_seconds` (default 300) of expiry. Concurrent requests share one queued
+probe. Manual probes and failure-triggered probes remain available. The request
+wait is bounded (default 1500 ms; negative means enqueue without waiting); the
+worker may continue for `probe_timeout_seconds` after the request resumes. A
+larger wait can improve the first request's injection hit rate but increases time
+to first byte. At the deadline the request uses the available cache, or proceeds
+without injection. `probe: false` and `probe_auth_ids` still govern probing.
+
+`use_issued_at` decodes the public Fernet envelope (version, timestamp and block
+layout), without decrypting or verifying its HMAC. It rejects malformed, expired
+and implausibly future-dated state, and stops injecting expired state. Length is
+still checked against `target_state_length`. All other modes keep the historical
+expired-state fallback. Restoring persisted state always preserves `StoredAt`,
+including manual entries; enabling timestamp checking also reparses its issue
+time, so restarting cannot renew the token's lifetime.
+
+`require_completed` waits for a delimited SSE `response.completed` whose
+`response.status` is `completed`, even when state arrived in HTTP headers.
+Harvest candidates are isolated by request/account/model and promoted only by a
+successful terminal response (HTTP non-stream responses additionally require 2xx
+and `status: completed`). Failed, incomplete, truncated and `[DONE]`-only streams
+are rejected. WebSocket events use the same terminal check. CPA formats that do
+not expose the Codex completion marker cannot be harvested in this mode. This
+checks upstream completion, not whether the downstream client read every byte.
+Candidate storage is bounded and stale candidates expire after two minutes.
+
+`error_aware_backoff` queues early refresh for 429/502/503/504 and overload errors.
+`usage_limit_reached` / `insufficient_quota` take precedence over HTTP status and
+suppress all probes for that account for `quota_backoff_seconds` (default 900).
+Probe quota failures stop the current attempt loop; transient probe failures use
+the remaining `max_probe_attempts`. Backoff is in memory and resets on process
+restart. Refreshing state cannot restore account quota. `rotate_proxy_start`
+advances the pool's starting proxy once per proxy-probe round.

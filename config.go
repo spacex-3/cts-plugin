@@ -49,6 +49,13 @@ type pluginConfig struct {
 	ShowStateValues         *bool    `yaml:"show_state_values"`
 	ProbeSchedule           string   `yaml:"probe_schedule"`
 	ProbeLeadSeconds        int      `yaml:"probe_lead_seconds"`
+	ProbeWaitMilliseconds   int      `yaml:"probe_wait_milliseconds"`
+	ProbeTimeoutSeconds     int      `yaml:"probe_timeout_seconds"`
+	UseIssuedAt             bool     `yaml:"use_issued_at"`
+	RequireCompleted        bool     `yaml:"require_completed"`
+	ErrorAwareBackoff       bool     `yaml:"error_aware_backoff"`
+	QuotaBackoffSeconds     int      `yaml:"quota_backoff_seconds"`
+	RotateProxyStart        bool     `yaml:"rotate_proxy_start"`
 	ProbeLogLimit           int      `yaml:"probe_log_limit"`
 	MaxProbeAttempts        int      `yaml:"max_probe_attempts"`
 	FailureReprobeThreshold int      `yaml:"failure_reprobe_threshold"`
@@ -166,8 +173,11 @@ func (c pluginConfig) probePrompt() string {
 }
 
 func (c pluginConfig) probeSchedule() string {
-	if strings.EqualFold(strings.TrimSpace(c.ProbeSchedule), "state_aware") {
+	switch strings.ToLower(strings.TrimSpace(c.ProbeSchedule)) {
+	case "state_aware":
 		return "state_aware"
+	case "on_demand":
+		return "on_demand"
 	}
 	return "fixed"
 }
@@ -313,4 +323,29 @@ func formatDuration(d time.Duration) string {
 func validateProxyConfig(cfg pluginConfig) error {
 	_, errParse := parseProxyURLsWithScheme(strings.Join(cfg.proxyLines(), "\n"), cfg.proxyScheme())
 	return errParse
+}
+
+// A negative wait means enqueue without waiting; zero selects the default.
+func (c pluginConfig) probeWait() time.Duration {
+	if c.ProbeWaitMilliseconds < 0 {
+		return 0
+	}
+	if c.ProbeWaitMilliseconds == 0 {
+		return 1500 * time.Millisecond
+	}
+	return time.Duration(c.ProbeWaitMilliseconds) * time.Millisecond
+}
+
+func (c pluginConfig) probeTimeout() time.Duration {
+	if c.ProbeTimeoutSeconds <= 0 {
+		return 60 * time.Second
+	}
+	return time.Duration(c.ProbeTimeoutSeconds) * time.Second
+}
+
+func (c pluginConfig) quotaBackoff() time.Duration {
+	if c.QuotaBackoffSeconds <= 0 {
+		return 900 * time.Second
+	}
+	return time.Duration(c.QuotaBackoffSeconds) * time.Second
 }

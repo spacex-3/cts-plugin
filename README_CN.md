@@ -156,3 +156,43 @@ macOS 使用 `.dylib`，Linux 使用 `.so`，Windows 使用 `.dll`。推送 `v*`
 - state 是不透明的上游数据；长度符合要求不等于一定有效，也不保证任何路由、容量或账号效果。
 
 本独立仓库基于 CLIProxyAPI 的 `examples/plugin/codex-turn-state` 实现整理，并保留 MIT 许可证。
+
+### 可选的请求驱动生命周期
+
+默认仍使用 `fixed` 定时探测和原有采集行为。按需模式及严格校验可显式开启：
+
+```yaml
+probe_schedule: on_demand
+probe_wait_milliseconds: 1500
+probe_timeout_seconds: 60
+use_issued_at: true
+require_completed: true
+error_aware_backoff: true
+quota_backoff_seconds: 900
+rotate_proxy_start: true
+```
+
+`on_demand` 不做启动探测、不运行周期定时器；有请求时，仅在所选账号/模型缺少
+state 或进入 `probe_lead_seconds`（默认 300 秒）续期窗口时排队探测。同一桶的
+并发请求共用探测。手动探测、请求失败触发的重探仍可用，`probe: false` 和
+`probe_auth_ids` 仍生效。请求默认最多等 1500 毫秒，负值表示仅排队不等；超时后
+使用已有缓存或不注入，后台探测最多继续到 60 秒总超时。增大等待时间提高首个
+请求命中率，但会增加首包延迟。
+
+`use_issued_at` 无需密钥解析 Fernet 信封的版本、签发时间和块布局；不会解密或验证
+HMAC。保持目标长度检查，并拒绝无效、过期、明显来自未来的 state。开启后过期
+state 不再注入；默认仍保留旧版过期 state 回退。恢复缓存始终保留原 `StoredAt`，
+包括手动 state；开启此项还会重新解析真实签发时间，重启不会让令牌变年轻。
+
+`require_completed` 要求 SSE 正常分帧结束的 `response.completed`，且
+`response.status=completed`；响应头先带 state 也不能提前成功。采集候选按请求、
+账号、模型隔离，只在成功终态提升；非流式响应还要求 HTTP 2xx 和 `status=completed`。
+失败、截断、incomplete、只有 `[DONE]` 的流均不接受，WebSocket 同理。CPA 转换后
+不含 Codex 完成标记的格式会放弃采集。此处确认上游完成，无法确认客户端读完每个
+字节。候选数量/大小受限，两分钟后过期。
+
+`error_aware_backoff` 对 429/502/503/504、overload 提前排队重探；额度错误
+`usage_limit_reached` / `insufficient_quota` 优先于 HTTP 状态，按账号停止所有探测
+默认 900 秒。探测中的额度失败会终止本轮重试，临时错误在 `max_probe_attempts`
+范围内继续。退避只保存在内存，进程重启会重置；刷新 state 无法恢复账号额度。
+`rotate_proxy_start` 每轮代理探测递增起点，默认关闭。

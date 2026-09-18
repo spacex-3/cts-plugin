@@ -40,6 +40,31 @@ type probeTarget struct {
 }
 
 func (rt *pluginRuntime) runProbeLoop(ctx context.Context) {
+	if rt.configSnapshot().probeSchedule() == "on_demand" {
+		rt.setNextProbeAt(time.Time{})
+		defer func() {
+			for {
+				select {
+				case job := <-rt.demandTrigger:
+					rt.finishDemand(job)
+				default:
+					return
+				}
+			}
+		}()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case job := <-rt.demandTrigger:
+				rt.runDemandProbe(ctx, job)
+			case <-rt.trigger:
+				rt.probeAll(ctx, false)
+			case key := <-rt.targetTrigger:
+				rt.probeKey(ctx, key)
+			}
+		}
+	}
 	interval := rt.configSnapshot().interval()
 	if interval <= 0 {
 		interval = time.Duration(defaultIntervalSeconds) * time.Second
@@ -85,7 +110,7 @@ func (rt *pluginRuntime) triggerProbe() {
 }
 
 func (rt *pluginRuntime) triggerTargetProbe(key cacheKey) bool {
-	if rt == nil || key.AuthID == "" || key.Model == "" || !rt.configSnapshot().probeEnabled() {
+	if rt == nil || key.AuthID == "" || key.Model == "" || !rt.configSnapshot().probeEnabled() || rt.quotaBlocked(key.AuthID, rt.configSnapshot()) {
 		return false
 	}
 	select {
@@ -123,17 +148,12 @@ func (rt *pluginRuntime) shouldSkipFreshProbe(target probeTarget, cfg pluginConf
 	if cfg.probeSchedule() != "state_aware" {
 		return false
 	}
-	entry, ok := rt.cache.lookup(target.AuthID, target.Model)
-	if !ok || entry.StoredAt.IsZero() {
-		return false
-	}
-	lead := cfg.probeLead()
-	return rt.now().Before(entry.StoredAt.Add(cfg.ttl() - lead))
+	return rt.freshForProbe(makeCacheKey(target.AuthID, target.Model), cfg)
 }
 
 func (rt *pluginRuntime) probeKey(ctx context.Context, key cacheKey) {
 	cfg := rt.configSnapshot()
-	if !cfg.probeEnabled() || ctx.Err() != nil {
+	if !cfg.probeEnabled() || ctx.Err() != nil || rt.quotaBlocked(key.AuthID, cfg) {
 		return
 	}
 	targets, proxies, ok := rt.prepareProbe(cfg)
@@ -204,6 +224,9 @@ func (rt *pluginRuntime) probeDirectBaseline(ctx context.Context, target probeTa
 }
 
 func (rt *pluginRuntime) probeTargetOnce(ctx context.Context, target probeTarget, cfg pluginConfig, proxies []string) {
+	if rt.quotaBlocked(target.AuthID, cfg) {
+		return
+	}
 	if cfg.directProbeEnabled() {
 		if state, errProbe := rt.probeOnce(ctx, "", target, cfg); errProbe == nil {
 			targetMatch := len(strings.TrimSpace(state)) == cfg.targetLength()
@@ -213,11 +236,15 @@ func (rt *pluginRuntime) probeTargetOnce(ctx context.Context, target probeTarget
 			}
 			rt.recordProbeAttempt(target, "direct", 0, state, targetMatch, false, errText)
 			if targetMatch {
-				rt.observeState(target.AuthID, target.Model, state, "direct")
-				return
+				if rt.observeState(target.AuthID, target.Model, state, "direct") {
+					return
+				}
 			}
 		} else {
 			rt.recordProbeAttempt(target, "direct", 0, "", false, false, errProbe.Error())
+			if rt.stopForQuota(target.AuthID, cfg, errProbe) {
+				return
+			}
 		}
 	}
 	rt.probeTargetWithProxies(ctx, proxies, target)
@@ -229,13 +256,23 @@ func (rt *pluginRuntime) probeTarget(ctx context.Context, proxyURL string, targe
 
 func (rt *pluginRuntime) probeTargetWithProxies(ctx context.Context, proxies []string, target probeTarget) {
 	cfg := rt.configSnapshot()
+	if len(proxies) == 0 || rt.quotaBlocked(target.AuthID, cfg) {
+		return
+	}
+	start := 0
+	if cfg.RotateProxyStart {
+		rt.mu.Lock()
+		start = int(rt.poolCursor % uint64(len(proxies)))
+		rt.poolCursor++
+		rt.mu.Unlock()
+	}
 	attempts := cfg.maxAttempts()
 	var lastErr error
 	for attempt := 1; attempt <= attempts; attempt++ {
-		if ctx.Err() != nil {
+		if ctx.Err() != nil || rt.quotaBlocked(target.AuthID, cfg) {
 			return
 		}
-		proxyIndex := (attempt - 1) % len(proxies)
+		proxyIndex := (start + attempt - 1) % len(proxies)
 		proxyURL := proxies[proxyIndex]
 		proxyLabel := redactProxyURL(proxyURL)
 		state, errProbe := rt.probeOnce(ctx, proxyURL, target, cfg)
@@ -243,6 +280,9 @@ func (rt *pluginRuntime) probeTargetWithProxies(ctx context.Context, proxies []s
 			lastErr = errProbe
 			rt.recordProbe(target, "", false, errProbe.Error())
 			rt.recordProbeAttemptWithProxy(target, "proxy", proxyLabel, attempt, "", false, false, errProbe.Error())
+			if rt.stopForQuota(target.AuthID, cfg, errProbe) {
+				return
+			}
 			continue
 		}
 		accepted := rt.observeState(target.AuthID, target.Model, state, "probe")
@@ -257,7 +297,7 @@ func (rt *pluginRuntime) probeTargetWithProxies(ctx context.Context, proxies []s
 			})
 			return
 		}
-		lastErr = fmt.Errorf("turn state length %d does not match target %d", len(strings.TrimSpace(state)), cfg.targetLength())
+		lastErr = fmt.Errorf("turn state rejected (length %d, target %d): invalid or expired state, or length mismatch", len(strings.TrimSpace(state)), cfg.targetLength())
 		rt.recordProbeAttemptWithProxy(target, "proxy", proxyLabel, attempt, state, false, false, lastErr.Error())
 		rt.recordProbe(target, state, false, lastErr.Error())
 		rt.host.Log("info", "codex-turn-state: probe turn state rejected", map[string]any{
@@ -312,7 +352,10 @@ func (rt *pluginRuntime) probeOnce(ctx context.Context, proxyURL string, target 
 	}()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		limited, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return "", fmt.Errorf("probe status %d: %s", resp.StatusCode, summarizeProbeError(limited))
+		return "", &probeFailure{status: resp.StatusCode, body: string(limited)}
+	}
+	if cfg.RequireCompleted {
+		return readCompletedState(resp.Body, headerTurnState(resp.Header))
 	}
 	if state := headerTurnState(resp.Header); state != "" {
 		return state, nil

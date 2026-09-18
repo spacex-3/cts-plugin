@@ -40,6 +40,7 @@ func applyAfterAuth(req pluginapi.RequestInterceptRequest) pluginapi.RequestInte
 	if !cfg.allows(authID, model) {
 		return pluginapi.RequestInterceptResponse{}
 	}
+	rt.ensureDemandProbe(makeCacheKey(authID, model), cfg)
 	entry, ok := rt.cache.lookup(authID, model)
 	if !ok || strings.TrimSpace(entry.State) == "" {
 		return pluginapi.RequestInterceptResponse{}
@@ -100,6 +101,12 @@ func harvestFromResponse(req pluginapi.ResponseInterceptRequest) {
 	if state == "" {
 		state = extractTurnStateFromChunk(req.Body)
 	}
+	if cfg.RequireCompleted {
+		if req.StatusCode >= 200 && req.StatusCode < 300 {
+			rt.harvestCompleted(req.RequestID, authID, model, state, req.Body, !req.Stream)
+		}
+		return
+	}
 	rt.observeState(authID, model, state, "harvest")
 }
 
@@ -120,6 +127,10 @@ func harvestFromStream(req pluginapi.StreamChunkInterceptRequest) {
 	if state == "" {
 		state = headerTurnState(req.ResponseHeaders)
 	}
+	if cfg.RequireCompleted {
+		rt.harvestCompleted(req.RequestID, authID, model, state, req.Body, false)
+		return
+	}
 	rt.observeState(authID, model, state, "harvest")
 }
 
@@ -137,6 +148,10 @@ func harvestFromWebSocket(event pluginapi.WebSocketResponseEvent) {
 		return
 	}
 	state := extractTurnStateFromChunk(event.Payload)
+	if cfg.RequireCompleted {
+		rt.harvestCompleted(event.RequestID, authID, model, state, event.Payload, false)
+		return
+	}
 	rt.observeState(authID, model, state, "harvest")
 }
 
