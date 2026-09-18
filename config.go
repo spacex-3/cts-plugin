@@ -28,7 +28,7 @@ const (
 )
 
 var (
-	pluginVersion      = "0.3.2"
+	pluginVersion      = "0.3.3"
 	defaultProbeModels = []string{"gpt-5.6-sol", "gpt-6-astra"}
 )
 
@@ -132,6 +132,10 @@ func (c pluginConfig) proxyLines() []string {
 	}
 	lines = append(lines, uniqueTrimmed(c.Proxies)...)
 	return lines
+}
+
+func (c pluginConfig) proxyLinesRaw() string {
+	return strings.Join(c.proxyLines(), "\n")
 }
 
 func (c pluginConfig) failureReprobeThreshold() int {

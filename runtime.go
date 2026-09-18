@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"strings"
 	"sync"
@@ -96,6 +97,7 @@ func (r *pluginRuntime) configSnapshot() pluginConfig {
 }
 
 func (r *pluginRuntime) applyConfig(cfg pluginConfig) error {
+	cfg = loadPersistedProxyLines(cfg)
 	cfg = normalizeConfig(cfg)
 	if errProxy := validateProxyConfig(cfg); errProxy != nil {
 		return errProxy
@@ -136,6 +138,37 @@ func (r *pluginRuntime) applyConfig(cfg pluginConfig) error {
 	}
 	r.globalErr = ""
 	r.startProbeLocked()
+	return nil
+}
+
+func (r *pluginRuntime) applyProxyLines(raw, scheme string) error {
+	raw = strings.ReplaceAll(strings.TrimSpace(raw), "\r\n", "\n")
+	if raw == "" {
+		return errors.New("至少需要一条代理")
+	}
+	scheme = strings.ToLower(strings.TrimSpace(scheme))
+	if scheme == "" {
+		scheme = r.configSnapshot().proxyScheme()
+	}
+	proxies, errParse := parseProxyURLsWithScheme(raw, scheme)
+	if errParse != nil {
+		return errParse
+	}
+	if len(proxies) == 0 {
+		return errors.New("至少需要一条代理")
+	}
+	r.mu.Lock()
+	cfg := clonePluginConfig(r.config)
+	cfg.Proxy = raw
+	cfg.Proxies = nil
+	cfg.ProxyScheme = scheme
+	r.config = normalizeConfig(cfg)
+	r.mu.Unlock()
+	if errSave := saveProxyLines(raw, scheme); errSave != nil {
+		r.host.Log("warn", "codex-turn-state: failed to persist proxy lines", map[string]any{"error": errSave.Error()})
+		return errSave
+	}
+	r.triggerProbe()
 	return nil
 }
 

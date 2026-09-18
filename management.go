@@ -151,6 +151,19 @@ func handleManagement(raw []byte) ([]byte, error) {
 	if op == "probe" {
 		currentRuntime().triggerProbe()
 	}
+	if op == "save_proxies" {
+		scheme := strings.TrimSpace(req.Query.Get("scheme"))
+		lines := string(req.Body)
+		if parsed := req.Query.Get("proxy_lines"); parsed != "" || strings.Contains(lines, "proxy_lines=") {
+			if values, errValues := url.ParseQuery(lines); errValues == nil {
+				lines = values.Get("proxy_lines")
+			}
+		}
+		if errSave := currentRuntime().applyProxyLines(lines, scheme); errSave != nil {
+			return nil, errSave
+		}
+		return okEnvelope(map[string]any{"ok": true, "saved": currentRuntime().configSnapshot().proxyLinesRaw()})
+	}
 	view := buildStatusView()
 	if strings.EqualFold(strings.TrimSpace(req.Query.Get("format")), "json") {
 		body, errMarshal := json.MarshalIndent(view, "", "  ")
@@ -344,6 +357,7 @@ func renderStatusPage(view statusView, triggered bool) []byte {
 	out.WriteString(".ok{color:var(--green);background:var(--green-bg)}.bad{color:var(--red);background:var(--red-bg)}.warn{color:var(--amber);background:var(--amber-bg)}.info{color:var(--blue);background:var(--blue-bg)}.muted{color:var(--muted)}")
 	out.WriteString(".banner{border-left:4px solid var(--red);background:var(--red-bg);color:var(--red);padding:8px 12px;border-radius:4px;margin:12px 0}")
 	out.WriteString(".toolbar{display:flex;align-items:center;gap:8px;margin:14px 0 2px}")
+	out.WriteString(".proxy-editor{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin:8px 0}.proxy-editor summary{cursor:pointer;color:var(--blue);font-size:12.5px;font-weight:700}.proxy-editor textarea{display:block;width:100%;min-height:110px;margin:8px 0;padding:8px;font:12px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;border:1px solid var(--line);border-radius:6px;resize:vertical}.proxy-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.proxy-actions select{padding:5px 8px;border:1px solid var(--line);border-radius:6px}")
 	out.WriteString(".chips{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0}.chip{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:11.5px}")
 	out.WriteString(".grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:12px}")
 	out.WriteString(".account{background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--accent,#94a3b8);border-radius:8px;overflow:hidden;min-width:0}")
@@ -361,6 +375,9 @@ func renderStatusPage(view statusView, triggered bool) []byte {
 	out.WriteString("<header><h1><span class=\"dot\"></span>Codex Turn State</h1></header>")
 	out.WriteString("<main>")
 	out.WriteString("<div class=\"toolbar\"><button type=\"button\" id=\"probe-now\">立即探测</button><span id=\"probe-status\" class=\"muted\" aria-live=\"polite\"></span></div>")
+	out.WriteString("<details class=\"proxy-editor\"><summary>代理池粘贴</summary><textarea id=\"proxy-lines\" rows=\"6\" spellcheck=\"false\" placeholder=\"每行一个：host:port:user:password\"></textarea><div class=\"proxy-actions\"><label>默认协议 <select id=\"proxy-scheme\">")
+	out.WriteString("<option value=\"socks5\">socks5</option><option value=\"http\">http</option><option value=\"https\">https</option><option value=\"socks5h\">socks5h</option>")
+	out.WriteString("</select></label><button type=\"button\" id=\"save-proxies\">保存代理池</button><span id=\"proxy-status\" class=\"muted\" aria-live=\"polite\"></span></div></details>")
 	if triggered {
 		out.WriteString("<div class=\"banner\" style=\"border-left-color:var(--green);background:var(--green-bg);color:var(--green)\">已触发一轮探测。</div>")
 	}
@@ -488,6 +505,7 @@ func renderStatusPage(view statusView, triggered bool) []byte {
 	out.WriteString("<p class=\"muted\">JSON: <code>?format=json</code></p>")
 	out.WriteString("<script>")
 	out.WriteString("var probeBtn=document.getElementById('probe-now'),probeStatus=document.getElementById('probe-status');if(probeBtn){probeBtn.addEventListener('click',function(){probeBtn.disabled=true;probeStatus.textContent='正在触发探测...';fetch(location.pathname+'?op=probe',{method:'GET'}).then(function(){probeStatus.textContent='已触发一轮探测，结果稍后刷新可见。';setTimeout(function(){probeBtn.disabled=false;},600);}).catch(function(){probeStatus.textContent='触发失败，请重试。';probeBtn.disabled=false;});});}")
+	out.WriteString("var saveBtn=document.getElementById('save-proxies'),proxyLines=document.getElementById('proxy-lines'),proxyScheme=document.getElementById('proxy-scheme'),proxyStatus=document.getElementById('proxy-status');if(saveBtn){saveBtn.addEventListener('click',function(){saveBtn.disabled=true;proxyStatus.textContent='正在保存...';fetch(location.pathname+'?op=save_proxies&scheme='+encodeURIComponent(proxyScheme.value),{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'proxy_lines='+encodeURIComponent(proxyLines.value)}).then(function(r){return r.json().catch(function(){return{};});}).then(function(d){if(d&&d.ok){proxyStatus.textContent='已保存，开始探测。';}else{proxyStatus.textContent='保存失败，请检查格式。';}}).catch(function(){proxyStatus.textContent='保存失败，请重试。';}).finally(function(){saveBtn.disabled=false;});});}")
 	out.WriteString("function fmt(left){if(left<=0)return '已过期';var h=Math.floor(left/3600),m=Math.floor((left%3600)/60),s=left%60;return (h>0?h+':':'')+String(m).padStart(2,'0')+':'+String(s).padStart(2,'0');}")
 	out.WriteString("function tick(){var now=Date.now();document.querySelectorAll('[data-countdown]').forEach(function(el){var ttl=Number(el.dataset.ttlSeconds||0);var left=Math.max(0,Math.ceil((Number(el.dataset.expiresAt)-now)/1000));el.textContent='倒计时 '+fmt(left);var bar=el.nextElementSibling.querySelector('i');if(bar){bar.style.width=(ttl>0?Math.min(100,left/ttl*100):0)+'%';}});}tick();setInterval(tick,1000);")
 	out.WriteString("</script>")

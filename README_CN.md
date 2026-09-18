@@ -108,6 +108,15 @@ plugins:
 
 页面顶部显示每个账号的彩色卡片，包含当前 state 长度、实时倒计时，以及当前窗口内的请求数、成功数、总 Token 和平均首字时间；下面显示最近探测和逐次代理尝试。命中目标长度的记录显示绿色，未命中或失败显示红色。页面永远不会显示代理用户名/密码或 Access Token。只有配置 `show_state_values: true` 后，后续捕获到的 state 原文才会进入页面和 JSON 日志；启用之前的记录不会恢复原文。
 
+页面里的“代理池粘贴”支持直接逐行粘贴原始格式，例如：
+
+```text
+us.rrp.bestgo.work:10000:USER-zone-custom-region-US:password
+us.rrp.bestgo.work:10000:USER-zone-custom-region-US:password
+```
+
+选择协议为 `socks5` 后保存，无需改成 JSON 数组。保存内容会写入本机插件数据目录，CPA 重启后自动加载。
+
 ## 本地构建与验证
 
 ```bash
