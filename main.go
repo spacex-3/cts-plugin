@@ -217,6 +217,7 @@ func pluginRegistration() registration {
 				{Name: "proxies", Type: pluginapi.ConfigFieldTypeArray, Description: "代理 JSON 数组，例如 [\"host:port:user:pw\", \"host2:port:user:pw\"]。每项格式为 host:port:user:password 或 http/https/socks5 URL。未命中时自动轮询下一条。"},
 				{Name: "proxy_scheme", Type: pluginapi.ConfigFieldTypeEnum, EnumValues: []string{"http", "https", "socks5", "socks5h"}, Description: "proxy/proxies 条目未写协议前缀时使用的默认协议。默认 http；BestGo 等 SOCKS5 节点请选 socks5。"},
 				{Name: "auth_ids", Type: pluginapi.ConfigFieldTypeArray, Description: "需要探测、采集和注入的 Codex 运行时 auth ID。留空表示选择全部 Codex 账号。"},
+				{Name: "probe_auth_ids", Type: pluginapi.ConfigFieldTypeArray, Description: "仅参与探测的 Codex auth ID。留空表示所有在 auth_ids 范围内的账号都探测；也可直接在状态页勾选保存。"},
 				{Name: "models", Type: pluginapi.ConfigFieldTypeArray, Description: "需要探测和注入的模型。默认 gpt-5.6-sol 和 gpt-6-astra。"},
 				{Name: "interval_seconds", Type: pluginapi.ConfigFieldTypeInteger, Description: "自动探测间隔（秒）。默认 300。"},
 				{Name: "target_state_length", Type: pluginapi.ConfigFieldTypeInteger, Description: "接受的 x-codex-turn-state 长度。默认 292。"},

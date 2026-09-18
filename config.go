@@ -28,7 +28,7 @@ const (
 )
 
 var (
-	pluginVersion      = "0.3.3"
+	pluginVersion      = "0.3.4"
 	defaultProbeModels = []string{"gpt-5.6-sol", "gpt-6-astra"}
 )
 
@@ -37,6 +37,7 @@ type pluginConfig struct {
 	Proxies                 []string `yaml:"proxies"`
 	ProxyScheme             string   `yaml:"proxy_scheme"`
 	AuthIDs                 []string `yaml:"auth_ids"`
+	ProbeAuthIDs            []string `yaml:"probe_auth_ids"`
 	Models                  []string `yaml:"models"`
 	IntervalSeconds         int      `yaml:"interval_seconds"`
 	TargetStateLength       int      `yaml:"target_state_length"`
@@ -174,6 +175,22 @@ func (c pluginConfig) authIDs() []string {
 	return uniqueTrimmed(c.AuthIDs)
 }
 
+func (c pluginConfig) probeAuthIDs() []string {
+	return uniqueTrimmed(c.ProbeAuthIDs)
+}
+
+func (c pluginConfig) probeAuthEnabled(authID string) bool {
+	authID = strings.TrimSpace(authID)
+	if authID == "" {
+		return false
+	}
+	probeAuthIDs := c.probeAuthIDs()
+	if len(probeAuthIDs) == 0 {
+		return true
+	}
+	return containsFold(probeAuthIDs, authID)
+}
+
 func (c pluginConfig) allows(authID, model string) bool {
 	authID = strings.TrimSpace(authID)
 	model = strings.TrimSpace(model)
@@ -189,6 +206,7 @@ func (c pluginConfig) allows(authID, model string) bool {
 
 func clonePluginConfig(cfg pluginConfig) pluginConfig {
 	cfg.AuthIDs = append([]string(nil), cfg.AuthIDs...)
+	cfg.ProbeAuthIDs = append([]string(nil), cfg.ProbeAuthIDs...)
 	cfg.Models = append([]string(nil), cfg.Models...)
 	cfg.Proxies = append([]string(nil), cfg.Proxies...)
 	return cfg
@@ -209,6 +227,7 @@ func normalizeConfig(cfg pluginConfig) pluginConfig {
 	cfg.Proxies = uniqueTrimmed(cfg.Proxies)
 	cfg.ProxyScheme = strings.ToLower(strings.TrimSpace(cfg.ProxyScheme))
 	cfg.AuthIDs = uniqueTrimmed(cfg.AuthIDs)
+	cfg.ProbeAuthIDs = uniqueTrimmed(cfg.ProbeAuthIDs)
 	cfg.Models = uniqueTrimmed(cfg.Models)
 	if cfg.IntervalSeconds < 0 {
 		cfg.IntervalSeconds = 0

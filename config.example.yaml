@@ -15,6 +15,8 @@ plugins:
       proxy_scheme: "http"
       auth_ids:
         - "codex-auth-id-1"
+      probe_auth_ids:
+        - "codex-auth-id-1"
       models:
         - "gpt-5.6-sol"
         - "gpt-6-astra"

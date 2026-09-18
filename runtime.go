@@ -98,6 +98,7 @@ func (r *pluginRuntime) configSnapshot() pluginConfig {
 
 func (r *pluginRuntime) applyConfig(cfg pluginConfig) error {
 	cfg = loadPersistedProxyLines(cfg)
+	cfg = loadPersistedProbeAuthIDs(cfg)
 	cfg = normalizeConfig(cfg)
 	if errProxy := validateProxyConfig(cfg); errProxy != nil {
 		return errProxy
@@ -138,6 +139,24 @@ func (r *pluginRuntime) applyConfig(cfg pluginConfig) error {
 	}
 	r.globalErr = ""
 	r.startProbeLocked()
+	return nil
+}
+
+func (r *pluginRuntime) applyProbeAuthIDs(authIDs []string) error {
+	authIDs = uniqueTrimmed(authIDs)
+	if len(authIDs) == 0 {
+		authIDs = []string{"__none__"}
+	}
+	r.mu.Lock()
+	cfg := clonePluginConfig(r.config)
+	cfg.ProbeAuthIDs = authIDs
+	r.config = normalizeConfig(cfg)
+	r.mu.Unlock()
+	if errSave := saveProbeAuthIDs(strings.Split(strings.Join(authIDs, "\n"), "\n")); errSave != nil {
+		r.host.Log("warn", "codex-turn-state: failed to persist probe auth selection", map[string]any{"error": errSave.Error()})
+		return errSave
+	}
+	r.triggerProbe()
 	return nil
 }
 

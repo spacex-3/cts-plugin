@@ -67,6 +67,7 @@ plugins:
 - `proxies`: recommended list form for multiple proxies, one item per entry. It is merged with `proxy`; use this in the CPA plugin config UI when the `proxy` string field collapses pasted newlines.
 - `proxy_scheme`: default protocol for `proxy`/`proxies` entries that omit a scheme. Choose `http` or `socks5`; the latter is required for SOCKS5-only providers such as BestGo. Default: `http`.
 - `auth_ids`: exact Codex runtime auth IDs. Empty permits every Codex auth visible to the host.
+- `probe_auth_ids`: auth IDs that may be probed. Empty probes every auth in the `auth_ids` scope; the status page also supports per-account selection.
 - `models`: exact upstream model IDs. Defaults to `gpt-5.6-sol` and `gpt-6-astra`.
 - `interval_seconds`: delay after one full probe cycle finishes. Default: `300`.
 - `target_state_length`: required state length. Default: `292`.

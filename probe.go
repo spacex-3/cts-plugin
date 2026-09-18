@@ -309,6 +309,9 @@ func (rt *pluginRuntime) listProbeTargets() ([]probeTarget, error) {
 		if len(authIDs) > 0 && !containsFold(authIDs, authID) {
 			continue
 		}
+		if !cfg.probeAuthEnabled(authID) {
+			continue
+		}
 		got, errGet := rt.host.AuthGet(file.AuthIndex)
 		if errGet != nil {
 			rt.host.Log("warn", "codex-turn-state: auth get failed", map[string]any{

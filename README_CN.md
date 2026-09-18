@@ -67,6 +67,7 @@ plugins:
 - `proxies`：推荐的多代理列表配置，每项一个代理；插件会把它和 `proxy` 合并。CPA 管理页对这个字段按 JSON 数组解析，因此请填写为 `["host:port:user:pw", "host2:port:user:pw"]`，不要直接逐行粘贴裸文本。
 - `proxy_scheme`：`proxy`/`proxies` 条目未写协议前缀时采用的默认协议。可选 `http` 或 `socks5`；BestGo 这类 SOCKS5 节点必须选 `socks5`。默认 `http`。
 - `auth_ids`：精确的 Codex 运行时账号 ID。留空表示允许所有可见 Codex 账号。
+- `probe_auth_ids`：只参与探测的账号。留空表示探测 `auth_ids` 范围内的全部账号；也可在状态页逐账号勾选并保存。
 - `models`：精确的上游模型 ID。默认是 `gpt-5.6-sol`、`gpt-6-astra`。
 - `interval_seconds`：上一轮完整探测结束后，到下一轮的等待时间。默认 `300`。
 - `target_state_length`：只缓存指定长度的 state。默认 `292`。
