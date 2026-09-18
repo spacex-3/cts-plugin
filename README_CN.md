@@ -54,7 +54,9 @@ plugins:
       harvest: true
       probe: true
       direct_probe: true
-      show_state_values: true
+      show_state_values: false
+      show_account_details: false
+      show_injection_headers: false
       probe_log_limit: 200
       max_probe_attempts: 3
       failure_reprobe_threshold: 3
@@ -94,20 +96,39 @@ plugins:
 1. CPA 本次实际选中的运行时账号 ID 与缓存账号完全一致；
 2. 解析后的上游模型与缓存模型完全一致；
 3. 账号和模型仍在配置范围中；
-4. state 长度正确且没有超过 TTL；
+4. 存在可用缓存（默认保留过期回退，`use_issued_at` 开启后严格检查真实年龄）；
 5. `inject: true`。
 
 匹配时会替换已有的同名请求头。轮询负载均衡如果选中了另一个账号，不会得到这个账号的 state。
 
 ## 状态页与手动探测
 
-```text
-/v0/resource/plugins/codex-turn-state/status
-```
+公开菜单地址 `/v0/resource/plugins/codex-turn-state/status` 只返回静态登录壳，
+不含运行数据；所有查询操作（包括原来的 `?format=json`）都被拒绝。输入 CPA
+管理密钥后加载原状态页，密钥只保留在本页内存，通过 `Authorization: Bearer ...`
+请求头发送，退出或刷新后清除。CPA 的远程管理限制仍然生效。
 
-- `GET .../status`：脱敏 HTML 状态页。
-- `GET .../status?format=json`：JSON 状态。
-- `POST .../status` 或 `GET .../status?op=probe`：立即排队执行一轮探测。
+数据与操作改为无 Menu 的 **受保护管理路由**：
+`/v0/management/plugins/codex-turn-state/status`。
+
+- `GET .../status`：受保护的 HTML 状态页。
+- `GET .../status?format=json`：受保护的 JSON 状态。
+- `GET .../status?op=fragment_probe_logs` / `fragment_injections`：受保护的局部刷新。
+- `POST .../status?op=probe` / `probe_target`：排队探测。
+- `POST .../status?op=save_manual_state` / `save_proxies` / `save_probe_accounts`：
+  用 URL 编码表单请求体保存。GET 写操作返回 405，state、代理凭据不再放入 URL。
+
+所有响应设置 `Cache-Control: no-store`。默认 HTML/JSON 不返回 state 原文、账号
+邮箱/名称/标签、注入请求头；可能含邮箱的 auth ID 也统一替换成稳定 SHA-256 别名，
+页面选择账号和操作会解析回真实 ID。`show_account_details: true` 显示真实身份；
+`show_injection_headers: true` 显示请求头，但其中 state 仍受 `show_state_values`
+控制，凭据头始终隐藏。上游错误原文不会经 HTTP 返回。
+
+鉴权由 CPA 管理中间件负责，插件无法读取或自行验证 CPA 管理密钥。不可另设绕过
+CPA 的无鉴权管理入口；应通过 HTTPS 保护传输中的密钥。获授权管理员仍能看到代理
+拓扑和显式开启的诊断数据。同源脚本和本地文件属于信任边界，账号别名仅为假名化，
+不提供不可猜测的匿名保证。运行缓存仍按原来的仅文件所有者可读写权限保存可用
+state，本改动不加密本地存储。
 
 页面顶部显示每个账号的彩色卡片，包含当前 state 长度、实时倒计时，以及当前窗口内的请求数、成功数、总 Token 和平均首字时间；下面显示最近探测和逐次代理尝试。命中目标长度的记录显示绿色，未命中或失败显示红色。页面永远不会显示代理用户名/密码或 Access Token。只有配置 `show_state_values: true` 后，后续捕获到的 state 原文才会进入页面和 JSON 日志；启用之前的记录不会恢复原文。
 

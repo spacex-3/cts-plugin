@@ -54,7 +54,9 @@ plugins:
       harvest: true
       probe: true
       direct_probe: true
-      show_state_values: true
+      show_state_values: false
+      show_account_details: false
+      show_injection_headers: false
       probe_log_limit: 200
       max_probe_attempts: 3
       failure_reprobe_threshold: 3
@@ -93,22 +95,46 @@ Injection occurs only when all of these match:
 
 1. CPA selected the exact same runtime Codex auth ID.
 2. The resolved upstream model is the exact configured model.
-3. The cached state still satisfies the configured length and TTL.
+3. A cached state exists (expired fallback remains the default; `use_issued_at` enforces token age).
 4. `inject` is enabled.
 
 An existing header with the same name is replaced for that execution attempt. Round-robin selection of another account does not receive the cached state.
 
 ## Status and manual probe
 
-The plugin registers:
+The public menu URL `/v0/resource/plugins/codex-turn-state/status` now serves
+only a static login shell. It contains no runtime data and rejects all query
+operations, including the former public `?format=json` URL. Enter the CPA
+management key to load the existing status page. The key stays in page memory,
+is sent as an `Authorization: Bearer ...` header, and is cleared on logout/reload.
+CPA's existing remote-management policy still applies.
 
-```text
-/v0/resource/plugins/codex-turn-state/status
-```
+Data and operations are registered without a menu under the **authenticated**
+`/v0/management/plugins/codex-turn-state/status` route:
 
-- `GET .../status`: redacted HTML status.
-- `GET .../status?format=json`: JSON status.
-- `POST .../status` or `GET .../status?op=probe`: queue an immediate probe cycle.
+- `GET .../status`: protected HTML status.
+- `GET .../status?format=json`: protected JSON status.
+- `GET .../status?op=fragment_probe_logs` / `fragment_injections`: protected fragments.
+- `POST .../status?op=probe` / `probe_target`: queue probes.
+- `POST .../status?op=save_manual_state` / `save_proxies` / `save_probe_accounts`:
+  save URL-encoded form bodies. GET mutations return 405.
+
+All status responses use `Cache-Control: no-store`. Default JSON/HTML omit state
+values, email/name/label and raw injection headers. Account IDs (which may contain
+email addresses) are replaced by stable SHA-256 aliases; the UI resolves them for
+account selection and operations. `show_account_details: true` opts into real
+identities. `show_injection_headers: true` opts into request headers; state still
+requires `show_state_values: true`, and credential headers remain redacted.
+Arbitrary upstream error bodies are not returned over HTTP.
+
+The security boundary is CPA's management middleware: the plugin cannot read or
+verify the CPA key itself. Do not expose an alternate unauthenticated route to the
+management handler. HTTPS is required to protect the key in transit. Authorized
+administrators can still see proxy topology and explicitly enabled diagnostic
+data. Same-origin scripts and local runtime files remain trusted; account aliases
+are pseudonyms, not a cryptographic anonymity guarantee. Runtime persistence still
+contains usable state with the existing owner-only file permissions. This change
+does not encrypt local storage.
 
 The page shows account cards at the top with a stable per-account color, current state length, live countdown, and requests/successes/total tokens/average TTFT for the current state window, followed by recent probe results and every proxy attempt. Proxy credentials and access tokens are never displayed. Full state values are displayed only when `show_state_values: true`; existing records captured while it was disabled remain hidden.
 

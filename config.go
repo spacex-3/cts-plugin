@@ -46,6 +46,8 @@ type pluginConfig struct {
 	Harvest                 *bool    `yaml:"harvest"`
 	Probe                   *bool    `yaml:"probe"`
 	DirectProbe             *bool    `yaml:"direct_probe"`
+	ShowAccountDetails      bool     `yaml:"show_account_details"`
+	ShowInjectionHeaders    bool     `yaml:"show_injection_headers"`
 	ShowStateValues         *bool    `yaml:"show_state_values"`
 	ProbeSchedule           string   `yaml:"probe_schedule"`
 	ProbeLeadSeconds        int      `yaml:"probe_lead_seconds"`

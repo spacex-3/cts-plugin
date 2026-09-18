@@ -37,7 +37,9 @@ plugins:
       harvest: true
       probe: true
       direct_probe: true
-      show_state_values: true
+      show_state_values: false
+      show_account_details: false
+      show_injection_headers: false
       probe_log_limit: 200
       max_probe_attempts: 3
       failure_reprobe_threshold: 3
