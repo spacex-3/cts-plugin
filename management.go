@@ -181,6 +181,15 @@ func handleManagement(raw []byte) ([]byte, error) {
 	if op == "probe" {
 		currentRuntime().triggerProbe()
 	}
+	if op == "probe_target" {
+		authID := strings.TrimSpace(req.Query.Get("auth_id"))
+		model := strings.TrimSpace(req.Query.Get("model"))
+		if authID == "" || model == "" {
+			return nil, fmt.Errorf("auth_id and model are required")
+		}
+		currentRuntime().triggerTargetProbe(makeCacheKey(authID, model))
+		return okEnvelope(map[string]any{"ok": true})
+	}
 	if op == "fragment_probe_logs" {
 		view := buildStatusView()
 		return okEnvelope(htmlResponse(http.StatusOK, []byte(renderProbeLogsFragment(view))))
@@ -498,6 +507,7 @@ func renderStatusPage(view statusView, triggered bool) []byte {
 	out.WriteString(".account-models{display:flex;gap:5px;align-items:stretch}.account-model{flex:1 1 0;min-width:0;background:#f8fafc;border:1px solid #edf0f3;border-radius:6px;padding:4px 5px}")
 	out.WriteString(".model-block{padding:2px 0}.model-block:first-child{border-top:0}")
 	out.WriteString(".model-row{display:flex;align-items:center;justify-content:space-between;gap:8px}.model-name{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;font-weight:700;color:#111827}")
+	out.WriteString(".model-probe{margin-top:6px;background:#fff;color:var(--blue);border:1px solid var(--blue);padding:3px 7px;font-size:11px}.model-probe:hover{background:var(--blue-bg)}")
 	out.WriteString(".countdown{margin:4px 0 5px;color:#111827}.bar{height:5px;border-radius:999px;background:#e8ebef;overflow:hidden}.bar>i{display:block;height:100%;background:var(--green);transition:width 1s linear}")
 	out.WriteString(".metrics{display:grid;grid-template-columns:repeat(2,1fr);gap:4px}.metric{background:#f8fafc;border:1px solid #edf0f3;border-radius:5px;padding:4px 5px}.metric-label{display:block;color:#4b5563;font-size:10px}.metric b{font-size:11.5px;font-weight:700;color:#111827}")
 	out.WriteString("details.state{margin-top:7px}summary{cursor:pointer;color:var(--blue);font-size:11.5px}details.state code{display:block;max-height:150px;overflow:auto;white-space:pre-wrap;margin-top:5px}")
@@ -645,6 +655,7 @@ func renderStatusPage(view statusView, triggered bool) []byte {
 	out.WriteString("var saveBtn=document.getElementById('save-proxies'),proxyLines=document.getElementById('proxy-lines'),proxyScheme=document.getElementById('proxy-scheme'),proxyStatus=document.getElementById('proxy-status');if(saveBtn){saveBtn.addEventListener('click',function(){saveBtn.disabled=true;proxyStatus.textContent='正在保存...';fetch(location.pathname+'?op=save_proxies&scheme='+encodeURIComponent(proxyScheme.value)+'&proxy_lines='+encodeURIComponent(proxyLines.value)).then(function(r){return r.json().catch(function(){return{};});}).then(function(d){if(d&&d.ok){proxyStatus.textContent='已保存，开始探测。';}else{proxyStatus.textContent='保存失败，请检查格式。';}}).catch(function(){proxyStatus.textContent='保存失败，请重试。';}).finally(function(){saveBtn.disabled=false;});});}")
 	out.WriteString("var manualSaveBtn=document.getElementById('save-manual-state'),manualAuth=document.getElementById('manual-auth'),manualModel=document.getElementById('manual-model'),manualState=document.getElementById('manual-state'),manualStatus=document.getElementById('manual-status');if(manualSaveBtn){manualSaveBtn.addEventListener('click',function(){if(!manualState.value.trim()){manualStatus.textContent='请粘贴 state。';return;}manualSaveBtn.disabled=true;manualStatus.textContent='正在保存...';fetch(location.pathname+'?op=save_manual_state&auth_id='+encodeURIComponent(manualAuth.value)+'&model='+encodeURIComponent(manualModel.value)+'&state='+encodeURIComponent(manualState.value)).then(function(r){return r.json().catch(function(){return{};});}).then(function(d){manualStatus.textContent=d&&d.ok?'已保存并启用。':'保存失败，请检查账号/模型。';}).catch(function(){manualStatus.textContent='保存失败，请重试。';}).finally(function(){manualSaveBtn.disabled=false;});});}")
 	out.WriteString("var accountSaveBtn=document.getElementById('save-probe-accounts'),selectAll=document.getElementById('probe-select-all'),accountStatus=document.getElementById('probe-account-status');if(selectAll){selectAll.addEventListener('change',function(){document.querySelectorAll('.probe-account').forEach(function(el){el.checked=selectAll.checked;});});}if(accountSaveBtn){accountSaveBtn.addEventListener('click',function(){var ids=Array.from(document.querySelectorAll('.probe-account:checked')).map(function(el){return el.dataset.auth;});accountSaveBtn.disabled=true;if(accountStatus)accountStatus.textContent='正在保存...';fetch(location.pathname+'?op=save_probe_accounts&auth_ids='+encodeURIComponent(ids.join(','))).then(function(r){return r.json().catch(function(){return{};});}).then(function(d){if(accountStatus)accountStatus.textContent=d&&d.ok?'已保存，开始探测。':'保存失败。';}).catch(function(){if(accountStatus)accountStatus.textContent='保存失败，请重试。';}).finally(function(){accountSaveBtn.disabled=false;});});}")
+	out.WriteString("document.querySelectorAll('.model-probe').forEach(function(btn){btn.addEventListener('click',function(){btn.disabled=true;var old=btn.textContent;btn.textContent='探测中...';fetch(location.pathname+'?op=probe_target&auth_id='+encodeURIComponent(btn.dataset.auth)+'&model='+encodeURIComponent(btn.dataset.model)).then(function(){btn.textContent='已触发';}).catch(function(){btn.textContent=old;}).finally(function(){btn.disabled=false;});});});")
 	out.WriteString("var probeRows=[],probePage=0,probeSize=10;function filteredProbeRows(){var auth=document.getElementById('probe-filter-auth'),model=document.getElementById('probe-filter-model'),match=document.getElementById('probe-filter-match');return probeRows.filter(function(r){return (!auth||!auth.value||r.dataset.auth===auth.value)&&(!model||!model.value||r.dataset.model===model.value)&&(!match||!match.value||r.dataset.match===match.value);});}function renderProbePage(){var rows=filteredProbeRows(),pages=Math.ceil(rows.length/probeSize)||1;if(probePage>=pages)probePage=Math.max(0,pages-1);probeRows.forEach(function(r){r.style.display='none';});rows.slice(probePage*probeSize,probePage*probeSize+probeSize).forEach(function(r){r.style.display='';});var info=document.getElementById('probe-log-info');if(info)info.textContent=rows.length?(probePage+1)+'/'+pages+' 页 · '+rows.length+' 条':'0 条';}function bindProbePage(){var auth=document.getElementById('probe-filter-auth'),model=document.getElementById('probe-filter-model'),match=document.getElementById('probe-filter-match');[auth,model,match].forEach(function(sel){if(sel)sel.addEventListener('change',function(){probePage=0;renderProbePage();});});var prev=document.getElementById('probe-log-prev'),next=document.getElementById('probe-log-next');if(prev)prev.addEventListener('click',function(){probePage=Math.max(0,probePage-1);renderProbePage();});if(next)next.addEventListener('click',function(){probePage++;renderProbePage();});}function initProbeLogs(){probeRows=Array.prototype.slice.call(document.querySelectorAll('.probe-log-row'));probePage=0;if(probeRows.length){renderProbePage();bindProbePage();}}")
 	out.WriteString("var injectionRows=[],injectionPage=0,injectionSize=10;function renderInjectionPage(){var pages=Math.ceil(injectionRows.length/injectionSize)||1;if(injectionPage>=pages)injectionPage=Math.max(0,pages-1);injectionRows.forEach(function(r){r.style.display='none';});injectionRows.slice(injectionPage*injectionSize,injectionPage*injectionSize+injectionSize).forEach(function(r){r.style.display='';});var info=document.getElementById('injection-info');if(info)info.textContent=injectionRows.length?(injectionPage+1)+'/'+pages+' 页 · '+injectionRows.length+' 条':'0 条';}function bindInjectionPage(){var prev=document.getElementById('injection-prev'),next=document.getElementById('injection-next');if(prev)prev.addEventListener('click',function(){injectionPage=Math.max(0,injectionPage-1);renderInjectionPage();});if(next)next.addEventListener('click',function(){injectionPage++;renderInjectionPage();});}function initInjectionTable(){injectionRows=Array.prototype.slice.call(document.querySelectorAll('.injection-row'));injectionPage=0;if(injectionRows.length){renderInjectionPage();bindInjectionPage();}}")
 	out.WriteString("function bindSectionRefresh(btnId,sectionId,op){var btn=document.getElementById(btnId),section=document.getElementById(sectionId);if(!btn||!section)return;btn.addEventListener('click',function(){btn.disabled=true;fetch(location.pathname+'?op='+op).then(function(r){return r.text();}).then(function(html){var div=document.createElement('div');div.innerHTML=html;section.innerHTML=div.innerHTML;if(op==='fragment_probe_logs'){initProbeLogs();}else if(op==='fragment_injections'){initInjectionTable();}}).finally(function(){btn=document.getElementById(btnId);if(btn)btn.disabled=false;});});}bindSectionRefresh('probe-refresh','probe-logs-section','fragment_probe_logs');bindSectionRefresh('injection-refresh','injection-section','fragment_injections');initProbeLogs();initInjectionTable();")
@@ -848,7 +859,7 @@ func writeAccountRow(out *bytes.Buffer, account statusAccount, showState bool) {
 			ttftTotal += model.AvgTTFTSeconds
 			ttftSamples++
 		}
-		writeCompactModelBlock(out, model, showState)
+		writeCompactModelBlock(out, account.AuthID, model, showState)
 	}
 	out.WriteString("</div></td>")
 	out.WriteString("<td>")
@@ -868,7 +879,7 @@ func writeAccountRow(out *bytes.Buffer, account statusAccount, showState bool) {
 	out.WriteString("</td></tr>")
 }
 
-func writeCompactModelBlock(out *bytes.Buffer, model statusAccountModel, showState bool) {
+func writeCompactModelBlock(out *bytes.Buffer, authID string, model statusAccountModel, showState bool) {
 	out.WriteString("<div class=\"account-model\"><div class=\"model-row\"><span class=\"model-name\">")
 	out.WriteString(html.EscapeString(model.Model))
 	out.WriteString("</span>")
@@ -877,7 +888,11 @@ func writeCompactModelBlock(out *bytes.Buffer, model statusAccountModel, showSta
 	} else {
 		out.WriteString("<span class=\"pill bad\">无 state</span>")
 	}
-	out.WriteString("</div>")
+	out.WriteString("<button type=\"button\" class=\"model-probe\" data-auth=\"")
+	out.WriteString(html.EscapeString(authID))
+	out.WriteString("\" data-model=\"")
+	out.WriteString(html.EscapeString(model.Model))
+	out.WriteString("\">仅探测此模型</button></div>")
 	if model.HasState {
 		out.WriteString("<div class=\"countdown\" data-countdown data-expires-at=\"")
 		out.WriteString(fmt.Sprintf("%d", model.ExpiresAtUnix))
