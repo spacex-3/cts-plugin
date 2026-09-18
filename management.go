@@ -111,6 +111,7 @@ type statusInjection struct {
 	RequestedModel  string  `json:"requested_model,omitempty"`
 	ReasoningEffort string  `json:"reasoning_effort,omitempty"`
 	Endpoint        string  `json:"endpoint,omitempty"`
+	Headers         string  `json:"headers,omitempty"`
 	Stream          bool    `json:"stream"`
 	State           string  `json:"state,omitempty"`
 	Length          int     `json:"length"`
@@ -348,12 +349,17 @@ func buildStatusView() statusView {
 		if entry.Latency > 0 && entry.OutputTokens > 0 {
 			tps = float64(entry.OutputTokens) / entry.Latency.Seconds()
 		}
-		endpoint := entry.ToFormat
-		if entry.SourceFormat != "" && entry.SourceFormat != entry.ToFormat {
-			endpoint = entry.SourceFormat + " → " + entry.ToFormat
+		endpoint := entry.Endpoint
+		if endpoint == "" {
+			endpoint = entry.ToFormat
+			if entry.SourceFormat != "" && entry.SourceFormat != entry.ToFormat {
+				endpoint = entry.SourceFormat + " → " + entry.ToFormat
+			}
 		}
 		if entry.Stream {
-			endpoint += " (stream)"
+			endpoint += " · 流式"
+		} else {
+			endpoint += " · 同步"
 		}
 		view.Injections = append(view.Injections, statusInjection{
 			Time:            entry.Time.Format(time.RFC3339),
@@ -363,6 +369,7 @@ func buildStatusView() statusView {
 			RequestedModel:  entry.RequestedModel,
 			ReasoningEffort: entry.ReasoningEffort,
 			Endpoint:        endpoint,
+			Headers:         entry.Headers,
 			Stream:          entry.Stream,
 			State:           visibleState(entry.State, cfg.showStateValuesEnabled()),
 			Length:          entry.Length,
@@ -462,11 +469,13 @@ func renderStatusPage(view statusView, triggered bool) []byte {
 	out.WriteString("h1{font-size:17px;margin:0;display:flex;align-items:center;gap:8px}.dot{width:10px;height:10px;border-radius:50%;background:var(--green);display:inline-block}")
 	out.WriteString("main{max-width:1280px;margin:0 auto;padding:16px 20px 36px}.section{margin:14px 0}.section-title{font-size:13px;font-weight:700;margin:0 0 8px;color:#323a46}")
 	out.WriteString("button{background:var(--blue);color:#fff;border:0;border-radius:6px;padding:6px 12px;font-size:12.5px;cursor:pointer}button:hover{background:#1d4fd7}button:disabled{opacity:.55;cursor:wait}button.secondary{background:#fff;color:var(--blue);border:1px solid var(--blue)}button.secondary:hover{background:var(--blue-bg)}")
-	out.WriteString("table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line)}th,td{border-bottom:1px solid var(--line);padding:6px 8px;text-align:left;vertical-align:top;word-break:break-word;color:#111827}th{background:#eef1f5;font-weight:700;font-size:12px;position:sticky;top:0;color:#111827}")
-	out.WriteString("code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px}.pill{display:inline-flex;align-items:center;gap:4px;padding:1px 7px;border-radius:999px;font-size:11px;font-weight:700}")
+	out.WriteString("table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line)}th,td{border-bottom:1px solid var(--line);padding:5px 6px;text-align:left;vertical-align:top;word-break:break-word;color:#111827}th{background:#eef1f5;font-weight:700;font-size:12px;position:sticky;top:0;color:#111827}")
+	out.WriteString(".injection-row td,.probe-log-row td{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px}")
+	out.WriteString("code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;background:transparent}.pill{display:inline-flex;align-items:center;gap:4px;padding:1px 7px;border-radius:999px;font-size:11px;font-weight:700}")
 	out.WriteString(".ok{color:var(--green);background:var(--green-bg)}.bad{color:var(--red);background:var(--red-bg)}.warn{color:var(--amber);background:var(--amber-bg)}.info{color:var(--blue);background:var(--blue-bg)}.muted{color:var(--muted)}")
 	out.WriteString(".banner{border-left:4px solid var(--red);background:var(--red-bg);color:var(--red);padding:8px 12px;border-radius:4px;margin:12px 0}")
 	out.WriteString(".toolbar{display:flex;align-items:center;gap:8px;margin:14px 0 2px}")
+	out.WriteString(".section-toolbar{display:flex;justify-content:flex-end;margin:2px 0 6px}.section-refresh{background:#fff;color:var(--blue);border:1px solid var(--blue)}")
 	out.WriteString(".filter-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:8px 0}.filter-bar select{padding:4px 6px;border:1px solid var(--line);border-radius:6px}.pager{display:flex;align-items:center;gap:8px;margin-top:8px}.pager button{padding:4px 9px}")
 	out.WriteString(".proxy-editor{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin:8px 0}.proxy-editor summary{cursor:pointer;color:var(--blue);font-size:12.5px;font-weight:700}.proxy-editor textarea{display:block;width:100%;min-height:110px;margin:8px 0;padding:8px;font:12px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;border:1px solid var(--line);border-radius:6px;resize:vertical}.proxy-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.proxy-actions select{padding:5px 8px;border:1px solid var(--line);border-radius:6px}")
 	out.WriteString(".manual-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px;margin:8px 0}.manual-grid select{width:100%;padding:5px 8px;border:1px solid var(--line);border-radius:6px}")
@@ -593,6 +602,7 @@ func renderStatusPage(view statusView, triggered bool) []byte {
 	if len(view.ProbeLogs) == 0 {
 		out.WriteString("<p class=\"muted\">暂无日志。</p>")
 	} else {
+		out.WriteString("<div class=\"section-toolbar\"><button type=\"button\" class=\"section-refresh\" onclick=\"location.reload()\">刷新</button></div>")
 		out.WriteString("<div class=\"filter-bar\"><label>账号 <select id=\"probe-filter-auth\"><option value=\"\">全部</option>")
 		for _, authID := range uniqueStrings(func() []string {
 			values := make([]string, 0, len(view.ProbeLogs))
@@ -664,7 +674,8 @@ func renderStatusPage(view statusView, triggered bool) []byte {
 	if len(view.Injections) == 0 {
 		out.WriteString("<p class=\"muted\">暂无注入记录。</p>")
 	} else {
-		out.WriteString("<table id=\"injection-table\"><thead><tr><th>时间</th><th>账号</th><th>模型</th><th>推理强度</th><th>端点</th><th>TPS</th><th>Token</th><th>首字</th><th>延迟</th><th>结果</th><th>State 请求头</th><th>来源</th></tr></thead><tbody>")
+		out.WriteString("<div class=\"section-toolbar\"><button type=\"button\" class=\"section-refresh\" onclick=\"location.reload()\">刷新</button></div>")
+		out.WriteString("<table id=\"injection-table\"><thead><tr><th>时间</th><th>账号</th><th>模型</th><th>推理强度</th><th>端点</th><th>TPS</th><th>Token</th><th>首字</th><th>延迟</th><th>结果</th><th>State 请求头</th><th>请求头</th><th>来源</th></tr></thead><tbody>")
 		for _, entry := range view.Injections {
 			out.WriteString("<tr class=\"injection-row\">")
 			writeCell(&out, entry.Time)
@@ -697,6 +708,11 @@ func renderStatusPage(view statusView, triggered bool) []byte {
 			out.WriteString(html.EscapeString(entry.State))
 			out.WriteString("\">")
 			out.WriteString(html.EscapeString(truncate(entry.State, 48)))
+			out.WriteString("</code></td>")
+			out.WriteString("<td><code title=\"")
+			out.WriteString(html.EscapeString(entry.Headers))
+			out.WriteString("\">")
+			out.WriteString(html.EscapeString(truncate(entry.Headers, 60)))
 			out.WriteString("</code></td>")
 			writeCell(&out, entry.Source)
 			out.WriteString("</tr>")

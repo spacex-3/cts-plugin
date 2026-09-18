@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
 	"strconv"
 	"strings"
 	"sync"
@@ -51,6 +53,7 @@ type injectionLogEntry struct {
 	TraceID         string
 	SourceFormat    string
 	ToFormat        string
+	Endpoint        string
 	RequestedModel  string
 	Stream          bool
 	ReasoningEffort string
@@ -60,6 +63,7 @@ type injectionLogEntry struct {
 	Length          int
 	Source          string
 	State           string
+	Headers         string
 	UsageAttached   bool
 	InputTokens     int64
 	OutputTokens    int64
@@ -359,6 +363,7 @@ func (r *pluginRuntime) recordInjection(req pluginapi.RequestInterceptRequest, e
 		TraceID:         strings.TrimSpace(req.TraceID),
 		SourceFormat:    strings.TrimSpace(req.SourceFormat),
 		ToFormat:        strings.TrimSpace(req.ToFormat),
+		Endpoint:        metadataString(req.Metadata, cliproxyexecutor.RequestPathMetadataKey),
 		RequestedModel:  strings.TrimSpace(req.RequestedModel),
 		Stream:          req.Stream,
 		ReasoningEffort: metadataString(req.Metadata, cliproxyexecutor.ReasoningEffortMetadataKey),
@@ -368,11 +373,31 @@ func (r *pluginRuntime) recordInjection(req pluginapi.RequestInterceptRequest, e
 		Length:          entry.Length,
 		Source:          entry.Source,
 		State:           entry.State,
+		Headers:         serializedRequestHeaders(req.Headers),
 	})
 	if len(r.injections) > limit {
 		r.injections = append([]injectionLogEntry(nil), r.injections[len(r.injections)-limit:]...)
 	}
 	r.persistLocked()
+}
+
+func serializedRequestHeaders(headers http.Header) string {
+	if headers == nil {
+		return ""
+	}
+	cloned := make(http.Header, len(headers))
+	for key, values := range headers {
+		if strings.EqualFold(key, "Authorization") || strings.EqualFold(key, "Cookie") {
+			cloned[key] = []string{"[redacted]"}
+			continue
+		}
+		cloned[key] = append([]string(nil), values...)
+	}
+	raw, errMarshal := json.Marshal(cloned)
+	if errMarshal != nil {
+		return ""
+	}
+	return string(raw)
 }
 
 func (r *pluginRuntime) recordProbeAttempt(target probeTarget, route string, attempt int, state string, targetMatch, cached bool, errText string) {
