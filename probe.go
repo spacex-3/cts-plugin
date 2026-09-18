@@ -46,7 +46,7 @@ func (rt *pluginRuntime) runProbeLoop(ctx context.Context) {
 	}
 	rt.setNextProbeAt(rt.now().Add(interval))
 	if len(rt.cache.snapshot()) == 0 {
-		rt.probeAll(ctx)
+		rt.probeAll(ctx, false)
 		rt.setNextProbeAt(rt.now().Add(interval))
 	}
 	timer := time.NewTimer(interval)
@@ -56,12 +56,12 @@ func (rt *pluginRuntime) runProbeLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-rt.trigger:
-			rt.probeAll(ctx)
+			rt.probeAll(ctx, false)
 			rt.setNextProbeAt(rt.now().Add(interval))
 		case key := <-rt.targetTrigger:
 			rt.probeKey(ctx, key)
 		case <-timer.C:
-			rt.probeAll(ctx)
+			rt.probeAll(ctx, true)
 			rt.setNextProbeAt(rt.now().Add(interval))
 		}
 		if !timer.Stop() {
@@ -96,7 +96,7 @@ func (rt *pluginRuntime) triggerTargetProbe(key cacheKey) bool {
 	}
 }
 
-func (rt *pluginRuntime) probeAll(ctx context.Context) {
+func (rt *pluginRuntime) probeAll(ctx context.Context, skipFresh bool) {
 	if rt == nil {
 		return
 	}
@@ -112,8 +112,23 @@ func (rt *pluginRuntime) probeAll(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
+		if skipFresh && rt.shouldSkipFreshProbe(target, cfg) {
+			continue
+		}
 		rt.probeTargetOnce(ctx, target, cfg, proxies)
 	}
+}
+
+func (rt *pluginRuntime) shouldSkipFreshProbe(target probeTarget, cfg pluginConfig) bool {
+	if cfg.probeSchedule() != "state_aware" {
+		return false
+	}
+	entry, ok := rt.cache.lookup(target.AuthID, target.Model)
+	if !ok || entry.StoredAt.IsZero() {
+		return false
+	}
+	lead := cfg.probeLead()
+	return rt.now().Before(entry.StoredAt.Add(cfg.ttl() - lead))
 }
 
 func (rt *pluginRuntime) probeKey(ctx context.Context, key cacheKey) {

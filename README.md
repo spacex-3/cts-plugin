@@ -70,6 +70,8 @@ plugins:
 - `probe_auth_ids`: auth IDs that may be probed. Empty probes every auth in the `auth_ids` scope; the status page also supports per-account selection.
 - `models`: exact upstream model IDs. Defaults to `gpt-5.6-sol` and `gpt-6-astra`.
 - `interval_seconds`: delay after one full probe cycle finishes. Default: `1800`.
+- `probe_schedule`: `fixed` probes on a constant interval; `state_aware` skips periodic probes while a fresh state is cached and only resumes shortly before expiry. Default: `fixed`.
+- `probe_lead_seconds`: lead time before state expiry used by `state_aware`. Default: `300`.
 - `target_state_length`: required state length. Default: `292`.
 - `ttl_seconds`: maximum cache age for injection. Default: `3600`.
 - `inject`: inject fresh cached state into matching requests. Default: `true`.

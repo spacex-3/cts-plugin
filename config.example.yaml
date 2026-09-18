@@ -21,6 +21,8 @@ plugins:
         - "gpt-5.6-sol"
         - "gpt-6-astra"
       interval_seconds: 1800
+      probe_schedule: "fixed"
+      probe_lead_seconds: 300
       target_state_length: 292
       ttl_seconds: 3600
       inject: true

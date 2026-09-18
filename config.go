@@ -28,7 +28,7 @@ const (
 )
 
 var (
-	pluginVersion      = "0.3.15"
+	pluginVersion      = "0.3.16"
 	defaultProbeModels = []string{"gpt-5.6-sol", "gpt-6-astra"}
 )
 
@@ -47,6 +47,8 @@ type pluginConfig struct {
 	Probe                   *bool    `yaml:"probe"`
 	DirectProbe             *bool    `yaml:"direct_probe"`
 	ShowStateValues         *bool    `yaml:"show_state_values"`
+	ProbeSchedule           string   `yaml:"probe_schedule"`
+	ProbeLeadSeconds        int      `yaml:"probe_lead_seconds"`
 	ProbeLogLimit           int      `yaml:"probe_log_limit"`
 	MaxProbeAttempts        int      `yaml:"max_probe_attempts"`
 	FailureReprobeThreshold int      `yaml:"failure_reprobe_threshold"`
@@ -163,6 +165,20 @@ func (c pluginConfig) probePrompt() string {
 	return c.Prompt
 }
 
+func (c pluginConfig) probeSchedule() string {
+	if strings.EqualFold(strings.TrimSpace(c.ProbeSchedule), "state_aware") {
+		return "state_aware"
+	}
+	return "fixed"
+}
+
+func (c pluginConfig) probeLead() time.Duration {
+	if c.ProbeLeadSeconds <= 0 {
+		return 5 * time.Minute
+	}
+	return time.Duration(c.ProbeLeadSeconds) * time.Second
+}
+
 func (c pluginConfig) models() []string {
 	out := uniqueTrimmed(c.Models)
 	if len(out) == 0 {
@@ -226,6 +242,7 @@ func normalizeConfig(cfg pluginConfig) pluginConfig {
 	cfg.Proxy = strings.TrimSpace(cfg.Proxy)
 	cfg.Proxies = uniqueTrimmed(cfg.Proxies)
 	cfg.ProxyScheme = strings.ToLower(strings.TrimSpace(cfg.ProxyScheme))
+	cfg.ProbeSchedule = strings.ToLower(strings.TrimSpace(cfg.ProbeSchedule))
 	cfg.AuthIDs = uniqueTrimmed(cfg.AuthIDs)
 	cfg.ProbeAuthIDs = uniqueTrimmed(cfg.ProbeAuthIDs)
 	cfg.Models = uniqueTrimmed(cfg.Models)
@@ -246,6 +263,9 @@ func normalizeConfig(cfg pluginConfig) pluginConfig {
 	}
 	if cfg.MaxProbeAttempts < 0 {
 		cfg.MaxProbeAttempts = 0
+	}
+	if cfg.ProbeLeadSeconds < 0 {
+		cfg.ProbeLeadSeconds = 0
 	}
 	if cfg.FailureReprobeThreshold < 0 {
 		cfg.FailureReprobeThreshold = -1

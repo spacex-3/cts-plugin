@@ -351,3 +351,32 @@ func TestProbeTargetOnceFallsBackToProxiesAfterDirectMismatch(t *testing.T) {
 		t.Fatalf("probe order = %#v, want direct then proxy", transport.proxies)
 	}
 }
+
+func TestShouldSkipFreshProbeOnlyInStateAwareMode(t *testing.T) {
+	now := time.Date(2026, time.September, 18, 16, 0, 0, 0, time.UTC)
+	rt := newRuntime()
+	rt.nowFunc = func() time.Time { return now }
+	rt.config = normalizeConfig(pluginConfig{
+		ProbeSchedule:    "state_aware",
+		ProbeLeadSeconds: 300,
+		TTLSeconds:       3600,
+	})
+	rt.cache = newStateCache(time.Hour, 292, rt.nowFunc)
+	rt.cache.putManual("auth-1", "model-1", "manual-state")
+	target := probeTarget{AuthID: "auth-1", Model: "model-1"}
+
+	if !rt.shouldSkipFreshProbe(target, rt.config) {
+		t.Fatal("state_aware mode should skip a fresh state")
+	}
+
+	now = now.Add(56 * time.Minute)
+	if rt.shouldSkipFreshProbe(target, rt.config) {
+		t.Fatal("state_aware mode should probe when close to expiry")
+	}
+
+	fixed := rt.config
+	fixed.ProbeSchedule = "fixed"
+	if rt.shouldSkipFreshProbe(target, fixed) {
+		t.Fatal("fixed mode should never skip fresh probes")
+	}
+}

@@ -70,6 +70,8 @@ plugins:
 - `probe_auth_ids`：只参与探测的账号。留空表示探测 `auth_ids` 范围内的全部账号；也可在状态页逐账号勾选并保存。
 - `models`：精确的上游模型 ID。默认是 `gpt-5.6-sol`、`gpt-6-astra`。
 - `interval_seconds`：上一轮完整探测结束后，到下一轮的等待时间。默认 `1800`，即 30 分钟。
+- `probe_schedule`：探测调度方式。`fixed` 为固定间隔；`state_aware` 在已持有新鲜 state 时跳过周期探测，等接近过期再续期。默认 `fixed`。
+- `probe_lead_seconds`：`state_aware` 模式下，在 state 过期前提前多少秒开始探测。默认 `300`。
 - `target_state_length`：只缓存指定长度的 state。默认 `292`。
 - `ttl_seconds`：缓存可用于注入的最长时间。默认 `3600`。
 - `inject`：向后续匹配请求注入缓存。默认 `true`。

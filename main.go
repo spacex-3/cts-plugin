@@ -227,6 +227,8 @@ func pluginRegistration() registration {
 				{Name: "probe", Type: pluginapi.ConfigFieldTypeBoolean, Description: "运行代理探测循环，主动获取 state。默认开启。"},
 				{Name: "direct_probe", Type: pluginapi.ConfigFieldTypeBoolean, Description: "每次代理探测前先记录一次无代理基线，用于对照，不会缓存。默认关闭。"},
 				{Name: "show_state_values", Type: pluginapi.ConfigFieldTypeBoolean, Description: "在状态页和 JSON 中显示完整 state 值。涉及敏感信息，仅在可信环境开启。默认关闭。"},
+				{Name: "probe_schedule", Type: pluginapi.ConfigFieldTypeEnum, EnumValues: []string{"fixed", "state_aware"}, Description: "探测调度方式。fixed 为固定间隔；state_aware 在已持有新鲜 state 时跳过周期探测，等接近过期再续期。默认 fixed。"},
+				{Name: "probe_lead_seconds", Type: pluginapi.ConfigFieldTypeInteger, Description: "state_aware 模式下，在 state 过期前提前多少秒开始探测。默认 300。"},
 				{Name: "probe_log_limit", Type: pluginapi.ConfigFieldTypeInteger, Description: "内存中保留的探测日志条数。默认 200，最大 1000。"},
 				{Name: "max_probe_attempts", Type: pluginapi.ConfigFieldTypeInteger, Description: "每个账号+模型在一轮探测中的尝试次数。默认 3。"},
 				{Name: "failure_reprobe_threshold", Type: pluginapi.ConfigFieldTypeInteger, Description: "倒计时窗口内连续失败多少次后自动重新探测。默认 3；设为负数可关闭。"},
