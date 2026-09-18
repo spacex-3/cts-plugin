@@ -214,7 +214,7 @@ func pluginRegistration() registration {
 			Logo:             "https://raw.githubusercontent.com/router-for-me/CLIProxyAPI/main/docs/logo.png",
 			ConfigFields: []pluginapi.ConfigField{
 				{Name: "proxy", Type: pluginapi.ConfigFieldTypeString, Description: "兼容配置：多个代理每行一个。建议改用下方的 proxies 列表，避免单行输入框把多行显示成一行。"},
-				{Name: "proxies", Type: pluginapi.ConfigFieldTypeArray, Description: "代理列表，每项一个。格式为 host:port:user:password 或 http/https/socks5 URL。未命中时自动轮询下一条。"},
+				{Name: "proxies", Type: pluginapi.ConfigFieldTypeArray, Description: "代理 JSON 数组，例如 [\"host:port:user:pw\", \"host2:port:user:pw\"]。每项格式为 host:port:user:password 或 http/https/socks5 URL。未命中时自动轮询下一条。"},
 				{Name: "proxy_scheme", Type: pluginapi.ConfigFieldTypeEnum, EnumValues: []string{"http", "https", "socks5", "socks5h"}, Description: "proxy/proxies 条目未写协议前缀时使用的默认协议。默认 http；BestGo 等 SOCKS5 节点请选 socks5。"},
 				{Name: "auth_ids", Type: pluginapi.ConfigFieldTypeArray, Description: "需要探测、采集和注入的 Codex 运行时 auth ID。留空表示选择全部 Codex 账号。"},
 				{Name: "models", Type: pluginapi.ConfigFieldTypeArray, Description: "需要探测和注入的模型。默认 gpt-5.6-sol 和 gpt-6-astra。"},
