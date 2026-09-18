@@ -373,7 +373,7 @@ func (r *pluginRuntime) recordInjection(req pluginapi.RequestInterceptRequest, e
 		Length:          entry.Length,
 		Source:          entry.Source,
 		State:           entry.State,
-		Headers:         serializedRequestHeaders(req.Headers),
+		Headers:         serializedRequestHeaders(req.Headers, entry.State),
 	})
 	if len(r.injections) > limit {
 		r.injections = append([]injectionLogEntry(nil), r.injections[len(r.injections)-limit:]...)
@@ -381,19 +381,23 @@ func (r *pluginRuntime) recordInjection(req pluginapi.RequestInterceptRequest, e
 	r.persistLocked()
 }
 
-func serializedRequestHeaders(headers http.Header) string {
-	if headers == nil {
-		return ""
+func serializedRequestHeaders(headers http.Header, state string) string {
+	out := make(http.Header)
+	if strings.TrimSpace(state) != "" {
+		out.Set(turnStateHeader, strings.TrimSpace(state))
 	}
-	cloned := make(http.Header, len(headers))
+	if headers == nil {
+		raw, _ := json.Marshal(out)
+		return string(raw)
+	}
 	for key, values := range headers {
 		if strings.EqualFold(key, "Authorization") || strings.EqualFold(key, "Cookie") {
-			cloned[key] = []string{"[redacted]"}
+			out[key] = []string{"[redacted]"}
 			continue
 		}
-		cloned[key] = append([]string(nil), values...)
+		out[key] = append([]string(nil), values...)
 	}
-	raw, errMarshal := json.Marshal(cloned)
+	raw, errMarshal := json.Marshal(out)
 	if errMarshal != nil {
 		return ""
 	}

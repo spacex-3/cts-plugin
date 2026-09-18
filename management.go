@@ -179,6 +179,14 @@ func handleManagement(raw []byte) ([]byte, error) {
 	if op == "probe" {
 		currentRuntime().triggerProbe()
 	}
+	if op == "fragment_probe_logs" {
+		view := buildStatusView()
+		return okEnvelope(htmlResponse(http.StatusOK, []byte(renderProbeLogsFragment(view))))
+	}
+	if op == "fragment_injections" {
+		view := buildStatusView()
+		return okEnvelope(htmlResponse(http.StatusOK, []byte(renderInjectionsFragment(view))))
+	}
 	if op == "save_proxies" {
 		scheme := strings.TrimSpace(req.Query.Get("scheme"))
 		lines := string(req.Body)
@@ -471,6 +479,7 @@ func renderStatusPage(view statusView, triggered bool) []byte {
 	out.WriteString("button{background:var(--blue);color:#fff;border:0;border-radius:6px;padding:6px 12px;font-size:12.5px;cursor:pointer}button:hover{background:#1d4fd7}button:disabled{opacity:.55;cursor:wait}button.secondary{background:#fff;color:var(--blue);border:1px solid var(--blue)}button.secondary:hover{background:var(--blue-bg)}")
 	out.WriteString("table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line)}th,td{border-bottom:1px solid var(--line);padding:5px 6px;text-align:left;vertical-align:top;word-break:break-word;color:#111827}th{background:#eef1f5;font-weight:700;font-size:12px;position:sticky;top:0;color:#111827}")
 	out.WriteString(".injection-row td,.probe-log-row td{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px}")
+	out.WriteString("table.fixed-table{table-layout:fixed;width:100%}table.fixed-table th,table.fixed-table td{overflow:hidden;text-overflow:ellipsis}")
 	out.WriteString("code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;background:transparent}.pill{display:inline-flex;align-items:center;gap:4px;padding:1px 7px;border-radius:999px;font-size:11px;font-weight:700}")
 	out.WriteString(".ok{color:var(--green);background:var(--green-bg)}.bad{color:var(--red);background:var(--red-bg)}.warn{color:var(--amber);background:var(--amber-bg)}.info{color:var(--blue);background:var(--blue-bg)}.muted{color:var(--muted)}")
 	out.WriteString(".banner{border-left:4px solid var(--red);background:var(--red-bg);color:var(--red);padding:8px 12px;border-radius:4px;margin:12px 0}")
@@ -597,129 +606,12 @@ func renderStatusPage(view statusView, triggered bool) []byte {
 	}
 	out.WriteString("</div>")
 
-	out.WriteString("<div class=\"section\"><div class=\"section-title\">探测日志</div>")
-	out.WriteString("<p class=\"muted\">绿色代表命中目标长度，红色代表未命中或失败；<code>direct</code> 为无代理基线，<code>proxy</code> 为实际代理轮询记录。</p>")
-	if len(view.ProbeLogs) == 0 {
-		out.WriteString("<p class=\"muted\">暂无日志。</p>")
-	} else {
-		out.WriteString("<div class=\"section-toolbar\"><button type=\"button\" class=\"section-refresh\" onclick=\"location.reload()\">刷新</button></div>")
-		out.WriteString("<div class=\"filter-bar\"><label>账号 <select id=\"probe-filter-auth\"><option value=\"\">全部</option>")
-		for _, authID := range uniqueStrings(func() []string {
-			values := make([]string, 0, len(view.ProbeLogs))
-			for _, entry := range view.ProbeLogs {
-				values = append(values, entry.AuthID)
-			}
-			return values
-		}()) {
-			out.WriteString("<option value=\"")
-			out.WriteString(html.EscapeString(authID))
-			out.WriteString("\">")
-			out.WriteString(html.EscapeString(authID))
-			out.WriteString("</option>")
-		}
-		out.WriteString("</select></label><label>模型 <select id=\"probe-filter-model\"><option value=\"\">全部</option>")
-		for _, model := range uniqueStrings(func() []string {
-			values := make([]string, 0, len(view.ProbeLogs))
-			for _, entry := range view.ProbeLogs {
-				values = append(values, entry.Model)
-			}
-			return values
-		}()) {
-			out.WriteString("<option value=\"")
-			out.WriteString(html.EscapeString(model))
-			out.WriteString("\">")
-			out.WriteString(html.EscapeString(model))
-			out.WriteString("</option>")
-		}
-		out.WriteString("</select></label><label>匹配 <select id=\"probe-filter-match\"><option value=\"\">全部</option><option value=\"1\">命中</option><option value=\"0\">未命中</option></select></label></div>")
-		out.WriteString("<table id=\"probe-log-table\"><thead><tr><th>时间</th><th>账号</th><th>模型</th><th>路由</th><th>代理</th><th>尝试</th><th>长度</th><th>匹配</th><th>缓存</th><th>State</th><th>错误</th></tr></thead><tbody>")
-		for _, entry := range view.ProbeLogs {
-			class := "mismatch"
-			if entry.TargetMatch {
-				class = "match"
-			}
-			out.WriteString("<tr class=\"probe-log-row " + class + "\" data-auth=\"")
-			out.WriteString(html.EscapeString(entry.AuthID))
-			out.WriteString("\" data-model=\"")
-			out.WriteString(html.EscapeString(entry.Model))
-			out.WriteString("\" data-match=\"")
-			if entry.TargetMatch {
-				out.WriteString("1")
-			} else {
-				out.WriteString("0")
-			}
-			out.WriteString("\">")
-			writeCell(&out, entry.Time)
-			writeCell(&out, entry.AuthID)
-			writeCell(&out, entry.Model)
-			writeCell(&out, entry.Route)
-			writeCell(&out, entry.Proxy)
-			writeCell(&out, fmt.Sprintf("%d", entry.Attempt))
-			writeCell(&out, fmt.Sprintf("%d", entry.Length))
-			writeCell(&out, fmt.Sprintf("%t", entry.TargetMatch))
-			writeCell(&out, fmt.Sprintf("%t", entry.Cached))
-			writeCell(&out, stateDisplay(entry.State, view.ShowStateValues))
-			writeCell(&out, entry.Error)
-			out.WriteString("</tr>")
-		}
-		out.WriteString("</tbody></table>")
-		out.WriteString("<div class=\"pager\"><button type=\"button\" id=\"probe-log-prev\">上一页</button><span id=\"probe-log-info\" class=\"muted\"></span><button type=\"button\" id=\"probe-log-next\">下一页</button></div>")
-	}
+	out.WriteString("<div class=\"section\" id=\"probe-logs-section\"><div class=\"section-title\">探测日志</div>")
+	out.WriteString(renderProbeLogsFragment(view))
 	out.WriteString("</div>")
 
-	out.WriteString("<div class=\"section\"><div class=\"section-title\">注入记录</div>")
-	if len(view.Injections) > 0 {
-		out.WriteString("<div class=\"injection-flag\">✓ 最近有请求已注入 state</div>")
-	}
-	if len(view.Injections) == 0 {
-		out.WriteString("<p class=\"muted\">暂无注入记录。</p>")
-	} else {
-		out.WriteString("<div class=\"section-toolbar\"><button type=\"button\" class=\"section-refresh\" onclick=\"location.reload()\">刷新</button></div>")
-		out.WriteString("<table id=\"injection-table\"><thead><tr><th>时间</th><th>账号</th><th>模型</th><th>推理强度</th><th>端点</th><th>TPS</th><th>Token</th><th>首字</th><th>延迟</th><th>结果</th><th>State 请求头</th><th>请求头</th><th>来源</th></tr></thead><tbody>")
-		for _, entry := range view.Injections {
-			out.WriteString("<tr class=\"injection-row\">")
-			writeCell(&out, entry.Time)
-			writeCell(&out, entry.AuthID)
-			writeCell(&out, entry.Model)
-			writeCell(&out, entry.ReasoningEffort)
-			writeCell(&out, entry.Endpoint)
-			if entry.TPS > 0 {
-				writeCell(&out, fmt.Sprintf("%.1f", entry.TPS))
-			} else {
-				writeCell(&out, "—")
-			}
-			writeCell(&out, fmt.Sprintf("%d", entry.TotalTokens))
-			if entry.TTFTSeconds > 0 {
-				writeCell(&out, fmt.Sprintf("%.2fs", entry.TTFTSeconds))
-			} else {
-				writeCell(&out, "—")
-			}
-			if entry.LatencySeconds > 0 {
-				writeCell(&out, fmt.Sprintf("%.2fs", entry.LatencySeconds))
-			} else {
-				writeCell(&out, "—")
-			}
-			if entry.Failed {
-				writeCell(&out, "失败")
-			} else {
-				writeCell(&out, "成功")
-			}
-			out.WriteString("<td><code title=\"")
-			out.WriteString(html.EscapeString(entry.State))
-			out.WriteString("\">")
-			out.WriteString(html.EscapeString(truncate(entry.State, 48)))
-			out.WriteString("</code></td>")
-			out.WriteString("<td><code title=\"")
-			out.WriteString(html.EscapeString(entry.Headers))
-			out.WriteString("\">")
-			out.WriteString(html.EscapeString(truncate(entry.Headers, 60)))
-			out.WriteString("</code></td>")
-			writeCell(&out, entry.Source)
-			out.WriteString("</tr>")
-		}
-		out.WriteString("</tbody></table>")
-		out.WriteString("<div class=\"pager\"><button type=\"button\" id=\"injection-prev\">上一页</button><span id=\"injection-info\" class=\"muted\"></span><button type=\"button\" id=\"injection-next\">下一页</button></div>")
-	}
+	out.WriteString("<div class=\"section\" id=\"injection-section\"><div class=\"section-title\">注入记录</div>")
+	out.WriteString(renderInjectionsFragment(view))
 	out.WriteString("</div>")
 
 	out.WriteString("<div class=\"section\"><div class=\"section-title\">Codex 凭据</div>")
@@ -747,13 +639,143 @@ func renderStatusPage(view statusView, triggered bool) []byte {
 	out.WriteString("var saveBtn=document.getElementById('save-proxies'),proxyLines=document.getElementById('proxy-lines'),proxyScheme=document.getElementById('proxy-scheme'),proxyStatus=document.getElementById('proxy-status');if(saveBtn){saveBtn.addEventListener('click',function(){saveBtn.disabled=true;proxyStatus.textContent='正在保存...';fetch(location.pathname+'?op=save_proxies&scheme='+encodeURIComponent(proxyScheme.value),{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'proxy_lines='+encodeURIComponent(proxyLines.value)}).then(function(r){return r.json().catch(function(){return{};});}).then(function(d){if(d&&d.ok){proxyStatus.textContent='已保存，开始探测。';}else{proxyStatus.textContent='保存失败，请检查格式。';}}).catch(function(){proxyStatus.textContent='保存失败，请重试。';}).finally(function(){saveBtn.disabled=false;});});}")
 	out.WriteString("var manualSaveBtn=document.getElementById('save-manual-state'),manualAuth=document.getElementById('manual-auth'),manualModel=document.getElementById('manual-model'),manualState=document.getElementById('manual-state'),manualStatus=document.getElementById('manual-status');if(manualSaveBtn){manualSaveBtn.addEventListener('click',function(){if(!manualState.value.trim()){manualStatus.textContent='请粘贴 state。';return;}manualSaveBtn.disabled=true;manualStatus.textContent='正在保存...';fetch(location.pathname+'?op=save_manual_state',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'auth_id='+encodeURIComponent(manualAuth.value)+'&model='+encodeURIComponent(manualModel.value)+'&state='+encodeURIComponent(manualState.value)}).then(function(r){return r.json().catch(function(){return{};});}).then(function(d){manualStatus.textContent=d&&d.ok?'已保存并启用。':'保存失败，请检查账号/模型。';}).catch(function(){manualStatus.textContent='保存失败，请重试。';}).finally(function(){manualSaveBtn.disabled=false;});});}")
 	out.WriteString("var accountSaveBtn=document.getElementById('save-probe-accounts'),selectAll=document.getElementById('probe-select-all'),accountStatus=document.getElementById('probe-account-status');if(selectAll){selectAll.addEventListener('change',function(){document.querySelectorAll('.probe-account').forEach(function(el){el.checked=selectAll.checked;});});}if(accountSaveBtn){accountSaveBtn.addEventListener('click',function(){var ids=Array.from(document.querySelectorAll('.probe-account:checked')).map(function(el){return el.dataset.auth;});accountSaveBtn.disabled=true;if(accountStatus)accountStatus.textContent='正在保存...';fetch(location.pathname+'?op=save_probe_accounts',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'auth_ids='+encodeURIComponent(ids.join(','))}).then(function(r){return r.json().catch(function(){return{};});}).then(function(d){if(accountStatus)accountStatus.textContent=d&&d.ok?'已保存，开始探测。':'保存失败。';}).catch(function(){if(accountStatus)accountStatus.textContent='保存失败，请重试。';}).finally(function(){accountSaveBtn.disabled=false;});});}")
-	out.WriteString("var probeRows=Array.prototype.slice.call(document.querySelectorAll('.probe-log-row')),probePage=0,probeSize=10;function filteredProbeRows(){var auth=document.getElementById('probe-filter-auth'),model=document.getElementById('probe-filter-model'),match=document.getElementById('probe-filter-match');return probeRows.filter(function(r){return (!auth||!auth.value||r.dataset.auth===auth.value)&&(!model||!model.value||r.dataset.model===model.value)&&(!match||!match.value||r.dataset.match===match.value);});}function renderProbePage(){var rows=filteredProbeRows(),pages=Math.ceil(rows.length/probeSize);if(probePage>=pages)probePage=Math.max(0,pages-1);probeRows.forEach(function(r){r.style.display='none';});rows.slice(probePage*probeSize,probePage*probeSize+probeSize).forEach(function(r){r.style.display='';});var info=document.getElementById('probe-log-info');if(info)info.textContent=rows.length?(probePage+1)+'/'+pages+' 页 · '+rows.length+' 条':'0 条';}function bindProbePage(){var auth=document.getElementById('probe-filter-auth'),model=document.getElementById('probe-filter-model'),match=document.getElementById('probe-filter-match');[auth,model,match].forEach(function(sel){if(sel)sel.addEventListener('change',function(){probePage=0;renderProbePage();});});var prev=document.getElementById('probe-log-prev'),next=document.getElementById('probe-log-next');if(prev)prev.addEventListener('click',function(){probePage=Math.max(0,probePage-1);renderProbePage();});if(next)next.addEventListener('click',function(){probePage++;renderProbePage();});}if(probeRows.length){renderProbePage();bindProbePage();}")
-	out.WriteString("var injectionRows=Array.prototype.slice.call(document.querySelectorAll('.injection-row')),injectionPage=0,injectionSize=10;function renderInjectionPage(){var pages=Math.ceil(injectionRows.length/injectionSize);if(injectionPage>=pages)injectionPage=Math.max(0,pages-1);injectionRows.forEach(function(r){r.style.display='none';});injectionRows.slice(injectionPage*injectionSize,injectionPage*injectionSize+injectionSize).forEach(function(r){r.style.display='';});var info=document.getElementById('injection-info');if(info)info.textContent=injectionRows.length?(injectionPage+1)+'/'+pages+' 页 · '+injectionRows.length+' 条':'0 条';}function bindInjectionPage(){var prev=document.getElementById('injection-prev'),next=document.getElementById('injection-next');if(prev)prev.addEventListener('click',function(){injectionPage=Math.max(0,injectionPage-1);renderInjectionPage();});if(next)next.addEventListener('click',function(){injectionPage++;renderInjectionPage();});}if(injectionRows.length){renderInjectionPage();bindInjectionPage();}")
+	out.WriteString("var probeRows=[],probePage=0,probeSize=10;function filteredProbeRows(){var auth=document.getElementById('probe-filter-auth'),model=document.getElementById('probe-filter-model'),match=document.getElementById('probe-filter-match');return probeRows.filter(function(r){return (!auth||!auth.value||r.dataset.auth===auth.value)&&(!model||!model.value||r.dataset.model===model.value)&&(!match||!match.value||r.dataset.match===match.value);});}function renderProbePage(){var rows=filteredProbeRows(),pages=Math.ceil(rows.length/probeSize)||1;if(probePage>=pages)probePage=Math.max(0,pages-1);probeRows.forEach(function(r){r.style.display='none';});rows.slice(probePage*probeSize,probePage*probeSize+probeSize).forEach(function(r){r.style.display='';});var info=document.getElementById('probe-log-info');if(info)info.textContent=rows.length?(probePage+1)+'/'+pages+' 页 · '+rows.length+' 条':'0 条';}function bindProbePage(){var auth=document.getElementById('probe-filter-auth'),model=document.getElementById('probe-filter-model'),match=document.getElementById('probe-filter-match');[auth,model,match].forEach(function(sel){if(sel)sel.addEventListener('change',function(){probePage=0;renderProbePage();});});var prev=document.getElementById('probe-log-prev'),next=document.getElementById('probe-log-next');if(prev)prev.addEventListener('click',function(){probePage=Math.max(0,probePage-1);renderProbePage();});if(next)next.addEventListener('click',function(){probePage++;renderProbePage();});}function initProbeLogs(){probeRows=Array.prototype.slice.call(document.querySelectorAll('.probe-log-row'));probePage=0;if(probeRows.length){renderProbePage();bindProbePage();}}")
+	out.WriteString("var injectionRows=[],injectionPage=0,injectionSize=10;function renderInjectionPage(){var pages=Math.ceil(injectionRows.length/injectionSize)||1;if(injectionPage>=pages)injectionPage=Math.max(0,pages-1);injectionRows.forEach(function(r){r.style.display='none';});injectionRows.slice(injectionPage*injectionSize,injectionPage*injectionSize+injectionSize).forEach(function(r){r.style.display='';});var info=document.getElementById('injection-info');if(info)info.textContent=injectionRows.length?(injectionPage+1)+'/'+pages+' 页 · '+injectionRows.length+' 条':'0 条';}function bindInjectionPage(){var prev=document.getElementById('injection-prev'),next=document.getElementById('injection-next');if(prev)prev.addEventListener('click',function(){injectionPage=Math.max(0,injectionPage-1);renderInjectionPage();});if(next)next.addEventListener('click',function(){injectionPage++;renderInjectionPage();});}function initInjectionTable(){injectionRows=Array.prototype.slice.call(document.querySelectorAll('.injection-row'));injectionPage=0;if(injectionRows.length){renderInjectionPage();bindInjectionPage();}}")
+	out.WriteString("function bindSectionRefresh(btnId,sectionId,op){var btn=document.getElementById(btnId),section=document.getElementById(sectionId);if(!btn||!section)return;btn.addEventListener('click',function(){btn.disabled=true;fetch(location.pathname+'?op='+op).then(function(r){return r.text();}).then(function(html){var div=document.createElement('div');div.innerHTML=html;section.innerHTML=div.innerHTML;if(op==='fragment_probe_logs'){initProbeLogs();}else if(op==='fragment_injections'){initInjectionTable();}}).finally(function(){btn=document.getElementById(btnId);if(btn)btn.disabled=false;});});}bindSectionRefresh('probe-refresh','probe-logs-section','fragment_probe_logs');bindSectionRefresh('injection-refresh','injection-section','fragment_injections');initProbeLogs();initInjectionTable();")
 	out.WriteString("function fmt(left){if(left<=0)return '已过期';var h=Math.floor(left/3600),m=Math.floor((left%3600)/60),s=left%60;return (h>0?h+':':'')+String(m).padStart(2,'0')+':'+String(s).padStart(2,'0');}")
 	out.WriteString("function tick(){var now=Date.now();document.querySelectorAll('[data-countdown]').forEach(function(el){var ttl=Number(el.dataset.ttlSeconds||0);var left=Math.max(0,Math.ceil((Number(el.dataset.expiresAt)-now)/1000));el.textContent='倒计时 '+fmt(left);var bar=el.nextElementSibling.querySelector('i');if(bar){bar.style.width=(ttl>0?Math.min(100,left/ttl*100):0)+'%';}});var next=document.getElementById('next-probe-countdown');if(next){var left=Math.max(0,Math.ceil((Number(next.dataset.expiresAt)-now)/1000));next.textContent=fmt(left);}}tick();setInterval(tick,1000);")
 	out.WriteString("</script>")
 	out.WriteString("</main></body></html>")
 	return out.Bytes()
+}
+
+func renderProbeLogsFragment(view statusView) string {
+	var out bytes.Buffer
+	out.WriteString("<p class=\"muted\">绿色代表命中目标长度，红色代表未命中或失败；<code>direct</code> 为无代理基线，<code>proxy</code> 为实际代理轮询记录。</p>")
+	if len(view.ProbeLogs) == 0 {
+		out.WriteString("<p class=\"muted\">暂无日志。</p>")
+		return out.String()
+	}
+	out.WriteString("<div class=\"section-toolbar\"><button type=\"button\" class=\"section-refresh\" id=\"probe-refresh\">刷新</button></div>")
+	out.WriteString("<div class=\"filter-bar\"><label>账号 <select id=\"probe-filter-auth\"><option value=\"\">全部</option>")
+	for _, authID := range uniqueStrings(func() []string {
+		values := make([]string, 0, len(view.ProbeLogs))
+		for _, entry := range view.ProbeLogs {
+			values = append(values, entry.AuthID)
+		}
+		return values
+	}()) {
+		out.WriteString("<option value=\"")
+		out.WriteString(html.EscapeString(authID))
+		out.WriteString("\">")
+		out.WriteString(html.EscapeString(authID))
+		out.WriteString("</option>")
+	}
+	out.WriteString("</select></label><label>模型 <select id=\"probe-filter-model\"><option value=\"\">全部</option>")
+	for _, model := range uniqueStrings(func() []string {
+		values := make([]string, 0, len(view.ProbeLogs))
+		for _, entry := range view.ProbeLogs {
+			values = append(values, entry.Model)
+		}
+		return values
+	}()) {
+		out.WriteString("<option value=\"")
+		out.WriteString(html.EscapeString(model))
+		out.WriteString("\">")
+		out.WriteString(html.EscapeString(model))
+		out.WriteString("</option>")
+	}
+	out.WriteString("</select></label><label>匹配 <select id=\"probe-filter-match\"><option value=\"\">全部</option><option value=\"1\">命中</option><option value=\"0\">未命中</option></select></label></div>")
+	out.WriteString("<table id=\"probe-log-table\" class=\"fixed-table\"><thead><tr><th style=\"width:14%\">时间</th><th style=\"width:14%\">账号</th><th style=\"width:10%\">模型</th><th style=\"width:7%\">路由</th><th style=\"width:15%\">代理</th><th style=\"width:5%\">尝试</th><th style=\"width:6%\">长度</th><th style=\"width:7%\">匹配</th><th style=\"width:6%\">缓存</th><th style=\"width:10%\">State</th><th style=\"width:6%\">错误</th></tr></thead><tbody>")
+	for _, entry := range view.ProbeLogs {
+		class := "mismatch"
+		if entry.TargetMatch {
+			class = "match"
+		}
+		out.WriteString("<tr class=\"probe-log-row " + class + "\" data-auth=\"")
+		out.WriteString(html.EscapeString(entry.AuthID))
+		out.WriteString("\" data-model=\"")
+		out.WriteString(html.EscapeString(entry.Model))
+		out.WriteString("\" data-match=\"")
+		if entry.TargetMatch {
+			out.WriteString("1")
+		} else {
+			out.WriteString("0")
+		}
+		out.WriteString("\">")
+		writeCell(&out, entry.Time)
+		writeCell(&out, entry.AuthID)
+		writeCell(&out, entry.Model)
+		writeCell(&out, entry.Route)
+		writeCell(&out, entry.Proxy)
+		writeCell(&out, fmt.Sprintf("%d", entry.Attempt))
+		writeCell(&out, fmt.Sprintf("%d", entry.Length))
+		writeCell(&out, fmt.Sprintf("%t", entry.TargetMatch))
+		writeCell(&out, fmt.Sprintf("%t", entry.Cached))
+		writeCell(&out, stateDisplay(entry.State, view.ShowStateValues))
+		writeCell(&out, entry.Error)
+		out.WriteString("</tr>")
+	}
+	out.WriteString("</tbody></table>")
+	out.WriteString("<div class=\"pager\"><button type=\"button\" id=\"probe-log-prev\">上一页</button><span id=\"probe-log-info\" class=\"muted\"></span><button type=\"button\" id=\"probe-log-next\">下一页</button></div>")
+	return out.String()
+}
+
+func renderInjectionsFragment(view statusView) string {
+	var out bytes.Buffer
+	if len(view.Injections) > 0 {
+		out.WriteString("<div class=\"injection-flag\">✓ 最近有请求已注入 state</div>")
+	}
+	if len(view.Injections) == 0 {
+		out.WriteString("<p class=\"muted\">暂无注入记录。</p>")
+		return out.String()
+	}
+	out.WriteString("<div class=\"section-toolbar\"><button type=\"button\" class=\"section-refresh\" id=\"injection-refresh\">刷新</button></div>")
+	out.WriteString("<table id=\"injection-table\" class=\"fixed-table\"><thead><tr><th style=\"width:11%\">时间</th><th style=\"width:11%\">账号</th><th style=\"width:8%\">模型</th><th style=\"width:6%\">推理强度</th><th style=\"width:9%\">端点</th><th style=\"width:5%\">TPS</th><th style=\"width:6%\">Token</th><th style=\"width:6%\">首字</th><th style=\"width:6%\">延迟</th><th style=\"width:5%\">结果</th><th style=\"width:14%\">State 请求头</th><th style=\"width:8%\">请求头</th><th style=\"width:5%\">来源</th></tr></thead><tbody>")
+	for _, entry := range view.Injections {
+		out.WriteString("<tr class=\"injection-row\">")
+		writeCell(&out, entry.Time)
+		writeCell(&out, entry.AuthID)
+		writeCell(&out, entry.Model)
+		writeCell(&out, entry.ReasoningEffort)
+		writeCell(&out, entry.Endpoint)
+		if entry.TPS > 0 {
+			writeCell(&out, fmt.Sprintf("%.1f", entry.TPS))
+		} else {
+			writeCell(&out, "—")
+		}
+		writeCell(&out, fmt.Sprintf("%d", entry.TotalTokens))
+		if entry.TTFTSeconds > 0 {
+			writeCell(&out, fmt.Sprintf("%.2fs", entry.TTFTSeconds))
+		} else {
+			writeCell(&out, "—")
+		}
+		if entry.LatencySeconds > 0 {
+			writeCell(&out, fmt.Sprintf("%.2fs", entry.LatencySeconds))
+		} else {
+			writeCell(&out, "—")
+		}
+		if entry.Failed {
+			writeCell(&out, "失败")
+		} else {
+			writeCell(&out, "成功")
+		}
+		out.WriteString("<td><code title=\"")
+		out.WriteString(html.EscapeString(entry.State))
+		out.WriteString("\">")
+		out.WriteString(html.EscapeString(truncate(entry.State, 48)))
+		out.WriteString("</code></td>")
+		out.WriteString("<td><code title=\"")
+		out.WriteString(html.EscapeString(entry.Headers))
+		out.WriteString("\">")
+		out.WriteString(html.EscapeString(truncate(entry.Headers, 60)))
+		out.WriteString("</code></td>")
+		writeCell(&out, entry.Source)
+		out.WriteString("</tr>")
+	}
+	out.WriteString("</tbody></table>")
+	out.WriteString("<div class=\"pager\"><button type=\"button\" id=\"injection-prev\">上一页</button><span id=\"injection-info\" class=\"muted\"></span><button type=\"button\" id=\"injection-next\">下一页</button></div>")
+	return out.String()
 }
 
 func writeModelBlock(out *bytes.Buffer, model statusAccountModel, showState bool) {
