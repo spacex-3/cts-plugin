@@ -171,10 +171,14 @@ func handleMethod(method string, request []byte) ([]byte, error) {
 		return handleUsage(request)
 	case pluginabi.MethodManagementRegister:
 		return okEnvelope(managementRegistration{
+			Routes: []managementRoute{
+				{Method: http.MethodGet, Path: managementStatusPath},
+				{Method: http.MethodPost, Path: managementStatusPath},
+			},
 			Resources: []managementResource{{
 				Path:        resourcePath,
 				Menu:        "Codex Turn State",
-				Description: "探测 Codex 账号的 x-codex-turn-state，并把命中目标长度的 ticket 注入后续请求。",
+				Description: "Codex Turn State 登录页；数据与操作由 CPA 管理密钥保护。",
 			}},
 		})
 	case pluginabi.MethodManagementHandle:
@@ -226,9 +230,18 @@ func pluginRegistration() registration {
 				{Name: "harvest", Type: pluginapi.ConfigFieldTypeBoolean, Description: "从正常 CPA Codex 流量中采集命中目标长度的 state。默认开启。"},
 				{Name: "probe", Type: pluginapi.ConfigFieldTypeBoolean, Description: "运行代理探测循环，主动获取 state。默认开启。"},
 				{Name: "direct_probe", Type: pluginapi.ConfigFieldTypeBoolean, Description: "每次代理探测前先记录一次无代理基线，用于对照，不会缓存。默认关闭。"},
+				{Name: "show_account_details", Type: pluginapi.ConfigFieldTypeBoolean, Description: "在受保护的状态页显示真实账号 ID、名称和邮箱。默认使用不透明别名。"},
+				{Name: "show_injection_headers", Type: pluginapi.ConfigFieldTypeBoolean, Description: "在受保护的状态页显示注入请求头。默认关闭；state 仍受 show_state_values 控制，凭据头始终隐藏。"},
 				{Name: "show_state_values", Type: pluginapi.ConfigFieldTypeBoolean, Description: "在状态页和 JSON 中显示完整 state 值。涉及敏感信息，仅在可信环境开启。默认关闭。"},
-				{Name: "probe_schedule", Type: pluginapi.ConfigFieldTypeEnum, EnumValues: []string{"fixed", "state_aware"}, Description: "探测调度方式。fixed 为固定间隔；state_aware 在已持有新鲜 state 时跳过周期探测，等接近过期再续期。默认 fixed。"},
-				{Name: "probe_lead_seconds", Type: pluginapi.ConfigFieldTypeInteger, Description: "state_aware 模式下，在 state 过期前提前多少秒开始探测。默认 300。"},
+				{Name: "probe_schedule", Type: pluginapi.ConfigFieldTypeEnum, EnumValues: []string{"fixed", "state_aware", "on_demand"}, Description: "探测调度方式。fixed 为固定间隔；state_aware 在已持有新鲜 state 时跳过周期探测，等接近过期再续期。on_demand 无定时或启动探测，由请求触发。默认 fixed。"},
+				{Name: "probe_wait_milliseconds", Type: pluginapi.ConfigFieldTypeInteger, Description: "on_demand 请求等待上限（毫秒）。默认 1500，负数只排队不等待。"},
+				{Name: "probe_timeout_seconds", Type: pluginapi.ConfigFieldTypeInteger, Description: "on_demand 后台探测总超时（秒）。默认 60。"},
+				{Name: "use_issued_at", Type: pluginapi.ConfigFieldTypeBoolean, Description: "按 Fernet 签发时间判断新鲜度；拒绝无效或过期 state。默认关闭。"},
+				{Name: "require_completed", Type: pluginapi.ConfigFieldTypeBoolean, Description: "仅在 response.completed / completed 响应后采集 state。默认关闭。"},
+				{Name: "error_aware_backoff", Type: pluginapi.ConfigFieldTypeBoolean, Description: "临时错误提前重探，额度不足按账号退避。默认关闭。"},
+				{Name: "quota_backoff_seconds", Type: pluginapi.ConfigFieldTypeInteger, Description: "额度不足后的探测退避（秒）。默认 900。刷新 state 无法恢复额度。"},
+				{Name: "rotate_proxy_start", Type: pluginapi.ConfigFieldTypeBoolean, Description: "跨轮递增代理池起点。默认关闭。"},
+				{Name: "probe_lead_seconds", Type: pluginapi.ConfigFieldTypeInteger, Description: "state_aware / on_demand 模式下，在 state 过期前提前多少秒开始探测。默认 300。"},
 				{Name: "probe_log_limit", Type: pluginapi.ConfigFieldTypeInteger, Description: "内存中保留的探测日志条数。默认 200，最大 1000。"},
 				{Name: "max_probe_attempts", Type: pluginapi.ConfigFieldTypeInteger, Description: "每个账号+模型在一轮探测中的尝试次数。默认 3。"},
 				{Name: "failure_reprobe_threshold", Type: pluginapi.ConfigFieldTypeInteger, Description: "倒计时窗口内连续失败多少次后自动重新探测。默认 3；设为负数可关闭。"},

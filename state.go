@@ -1,6 +1,9 @@
 package main
 
 import (
+	"encoding/base64"
+	"encoding/binary"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -17,6 +20,7 @@ type cacheEntry struct {
 	State    string
 	Length   int
 	StoredAt time.Time
+	IssuedAt time.Time `json:",omitempty"`
 	Source   string
 }
 
@@ -35,6 +39,7 @@ type stateCache struct {
 	entries      map[cacheKey]cacheEntry
 	ttl          time.Duration
 	targetLength int
+	useIssuedAt  bool
 	nowFunc      func() time.Time
 }
 
@@ -88,17 +93,31 @@ func (c *stateCache) storeTarget(authID, model, state, source string, refresh bo
 	authID = strings.TrimSpace(authID)
 	model = strings.TrimSpace(model)
 	state = strings.TrimSpace(state)
-	if authID == "" || model == "" || state == "" || len(state) != c.targetLength {
+	if authID == "" || model == "" || state == "" {
 		return cacheEntry{}, false, false
 	}
 	key := cacheKey{AuthID: authID, Model: model}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	now := c.nowLocked()
+	if len(state) != c.targetLength {
+		return cacheEntry{}, false, false
+	}
+	var issuedAt time.Time
+	if c.useIssuedAt {
+		var err error
+		issuedAt, err = parseStateIssuedAt(state)
+		if err != nil || issuedAt.After(now.Add(time.Minute)) || (c.ttl > 0 && !now.Before(issuedAt.Add(c.ttl))) {
+			return cacheEntry{}, false, false
+		}
+	}
 	current, exists := c.entries[key]
 	if exists && c.expiredLocked(current, now) {
 		delete(c.entries, key)
 		exists = false
+	}
+	if exists && c.useIssuedAt && current.IssuedAt.After(issuedAt) {
+		return current, false, false
 	}
 	if exists && current.State == state && !refresh {
 		return current, true, false
@@ -109,6 +128,7 @@ func (c *stateCache) storeTarget(authID, model, state, source string, refresh bo
 		State:    state,
 		Length:   len(state),
 		StoredAt: now,
+		IssuedAt: issuedAt,
 		Source:   source,
 	}
 	c.entries[key] = entry
@@ -136,6 +156,13 @@ func (c *stateCache) putManual(authID, model, state string) (cacheEntry, bool) {
 		StoredAt: c.nowLocked(),
 		Source:   "manual",
 	}
+	if c.useIssuedAt {
+		issuedAt, err := parseStateIssuedAt(state)
+		if err != nil || issuedAt.After(c.nowLocked().Add(time.Minute)) || (c.ttl > 0 && !c.nowLocked().Before(issuedAt.Add(c.ttl))) {
+			return cacheEntry{}, false
+		}
+		entry.IssuedAt = issuedAt
+	}
 	c.entries[key] = entry
 	return entry, true
 }
@@ -148,7 +175,7 @@ func (c *stateCache) lookup(authID, model string) (cacheEntry, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	entry, ok := c.entries[key]
-	if !ok {
+	if !ok || (c.useIssuedAt && c.expiredLocked(entry, c.nowLocked())) {
 		return cacheEntry{}, false
 	}
 	return entry, true
@@ -192,7 +219,7 @@ func (c *stateCache) remaining(entry cacheEntry) time.Duration {
 	if c.ttl <= 0 || entry.StoredAt.IsZero() {
 		return 0
 	}
-	left := c.ttl - c.nowLocked().Sub(entry.StoredAt)
+	left := c.ttl - c.nowLocked().Sub(entry.freshnessTime())
 	if left < 0 {
 		return 0
 	}
@@ -200,7 +227,7 @@ func (c *stateCache) remaining(entry cacheEntry) time.Duration {
 }
 
 func (c *stateCache) expiredLocked(entry cacheEntry, now time.Time) bool {
-	return c.ttl > 0 && !entry.StoredAt.IsZero() && now.Sub(entry.StoredAt) >= c.ttl
+	return c.ttl > 0 && !entry.StoredAt.IsZero() && now.Sub(entry.freshnessTime()) >= c.ttl
 }
 
 func (c *stateCache) removeExpiredLocked(now time.Time) {
@@ -213,4 +240,71 @@ func (c *stateCache) removeExpiredLocked(now time.Time) {
 
 func makeCacheKey(authID, model string) cacheKey {
 	return cacheKey{AuthID: strings.TrimSpace(authID), Model: strings.TrimSpace(model)}
+}
+
+// Fernet's timestamp is public envelope metadata, not an authenticated claim:
+// this parser neither decrypts the state nor verifies its HMAC.
+func parseStateIssuedAt(state string) (time.Time, error) {
+	raw, err := base64.URLEncoding.DecodeString(strings.TrimSpace(state))
+	if err != nil {
+		raw, err = base64.RawURLEncoding.DecodeString(strings.TrimSpace(state))
+	}
+	// Version + timestamp + IV + at least one AES block + HMAC.
+	if err != nil || len(raw) < 73 || raw[0] != 0x80 || (len(raw)-57)%16 != 0 {
+		return time.Time{}, fmt.Errorf("invalid Fernet envelope")
+	}
+	stamp := binary.BigEndian.Uint64(raw[1:9])
+	if stamp == 0 || stamp > 1<<63-1 {
+		return time.Time{}, fmt.Errorf("invalid Fernet timestamp")
+	}
+	return time.Unix(int64(stamp), 0).UTC(), nil
+}
+
+func (e cacheEntry) freshnessTime() time.Time {
+	if !e.IssuedAt.IsZero() {
+		return e.IssuedAt
+	}
+	return e.StoredAt
+}
+
+func (c *stateCache) configureIssuedAt(enabled bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.useIssuedAt = enabled
+	for key, entry := range c.entries {
+		entry.IssuedAt = time.Time{}
+		if enabled {
+			issuedAt, err := parseStateIssuedAt(entry.State)
+			if err != nil || issuedAt.After(c.nowLocked().Add(time.Minute)) {
+				delete(c.entries, key)
+				continue
+			}
+			entry.IssuedAt = issuedAt
+		}
+		c.entries[key] = entry
+	}
+}
+
+// Restore the original observation age, including manual entries. Do not route
+// restoration through the methods that timestamp a new observation.
+func (c *stateCache) restore(entry cacheEntry) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	now := c.nowLocked()
+	if entry.AuthID == "" || entry.Model == "" || entry.State == "" || entry.StoredAt.IsZero() || entry.StoredAt.After(now) || c.expiredLocked(entry, now) {
+		return
+	}
+	entry.Length = len(entry.State)
+	if entry.Source != "manual" && entry.Length != c.targetLength {
+		return
+	}
+	entry.IssuedAt = time.Time{}
+	if c.useIssuedAt {
+		issuedAt, err := parseStateIssuedAt(entry.State)
+		if err != nil || issuedAt.After(c.nowLocked().Add(time.Minute)) {
+			return
+		}
+		entry.IssuedAt = issuedAt
+	}
+	c.entries[makeCacheKey(entry.AuthID, entry.Model)] = entry
 }

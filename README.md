@@ -54,7 +54,9 @@ plugins:
       harvest: true
       probe: true
       direct_probe: true
-      show_state_values: true
+      show_state_values: false
+      show_account_details: false
+      show_injection_headers: false
       probe_log_limit: 200
       max_probe_attempts: 3
       failure_reprobe_threshold: 3
@@ -93,22 +95,46 @@ Injection occurs only when all of these match:
 
 1. CPA selected the exact same runtime Codex auth ID.
 2. The resolved upstream model is the exact configured model.
-3. The cached state still satisfies the configured length and TTL.
+3. A cached state exists (expired fallback remains the default; `use_issued_at` enforces token age).
 4. `inject` is enabled.
 
 An existing header with the same name is replaced for that execution attempt. Round-robin selection of another account does not receive the cached state.
 
 ## Status and manual probe
 
-The plugin registers:
+The public menu URL `/v0/resource/plugins/codex-turn-state/status` now serves
+only a static login shell. It contains no runtime data and rejects all query
+operations, including the former public `?format=json` URL. Enter the CPA
+management key to load the existing status page. The key stays in page memory,
+is sent as an `Authorization: Bearer ...` header, and is cleared on logout/reload.
+CPA's existing remote-management policy still applies.
 
-```text
-/v0/resource/plugins/codex-turn-state/status
-```
+Data and operations are registered without a menu under the **authenticated**
+`/v0/management/plugins/codex-turn-state/status` route:
 
-- `GET .../status`: redacted HTML status.
-- `GET .../status?format=json`: JSON status.
-- `POST .../status` or `GET .../status?op=probe`: queue an immediate probe cycle.
+- `GET .../status`: protected HTML status.
+- `GET .../status?format=json`: protected JSON status.
+- `GET .../status?op=fragment_probe_logs` / `fragment_injections`: protected fragments.
+- `POST .../status?op=probe` / `probe_target`: queue probes.
+- `POST .../status?op=save_manual_state` / `save_proxies` / `save_probe_accounts`:
+  save URL-encoded form bodies. GET mutations return 405.
+
+All status responses use `Cache-Control: no-store`. Default JSON/HTML omit state
+values, email/name/label and raw injection headers. Account IDs (which may contain
+email addresses) are replaced by stable SHA-256 aliases; the UI resolves them for
+account selection and operations. `show_account_details: true` opts into real
+identities. `show_injection_headers: true` opts into request headers; state still
+requires `show_state_values: true`, and credential headers remain redacted.
+Arbitrary upstream error bodies are not returned over HTTP.
+
+The security boundary is CPA's management middleware: the plugin cannot read or
+verify the CPA key itself. Do not expose an alternate unauthenticated route to the
+management handler. HTTPS is required to protect the key in transit. Authorized
+administrators can still see proxy topology and explicitly enabled diagnostic
+data. Same-origin scripts and local runtime files remain trusted; account aliases
+are pseudonyms, not a cryptographic anonymity guarantee. Runtime persistence still
+contains usable state with the existing owner-only file permissions. This change
+does not encrypt local storage.
 
 The page shows account cards at the top with a stable per-account color, current state length, live countdown, and requests/successes/total tokens/average TTFT for the current state window, followed by recent probe results and every proxy attempt. Proxy credentials and access tokens are never displayed. Full state values are displayed only when `show_state_values: true`; existing records captured while it was disabled remain hidden.
 
@@ -134,3 +160,55 @@ Use `.dylib` on macOS, `.so` on Linux, or `.dll` on Windows. Release tags build 
 - A state of the expected length is still opaque upstream data; length does not guarantee validity or any routing/capacity outcome.
 
 This standalone repository is derived from the CLIProxyAPI `examples/plugin/codex-turn-state` implementation and retains the MIT license.
+
+### Optional request-driven lifecycle
+
+Existing `fixed` scheduling and legacy acceptance remain the defaults. To enable
+all lifecycle improvements, set these options in the plugin configuration:
+
+```yaml
+probe_schedule: on_demand
+probe_wait_milliseconds: 1500
+probe_timeout_seconds: 60
+use_issued_at: true
+require_completed: true
+error_aware_backoff: true
+quota_backoff_seconds: 900
+rotate_proxy_start: true
+```
+
+`on_demand` has no startup probe or periodic timer. An eligible business request
+probes only its selected account/model when state is missing or within
+`probe_lead_seconds` (default 300) of expiry. Concurrent requests share one queued
+probe. Manual probes and failure-triggered probes remain available. The request
+wait is bounded (default 1500 ms; negative means enqueue without waiting); the
+worker may continue for `probe_timeout_seconds` after the request resumes. A
+larger wait can improve the first request's injection hit rate but increases time
+to first byte. At the deadline the request uses the available cache, or proceeds
+without injection. `probe: false` and `probe_auth_ids` still govern probing.
+
+`use_issued_at` decodes the public Fernet envelope (version, timestamp and block
+layout), without decrypting or verifying its HMAC. It rejects malformed, expired
+and implausibly future-dated state, and stops injecting expired state. Length is
+still checked against `target_state_length`. All other modes keep the historical
+expired-state fallback. Restoring persisted state always preserves `StoredAt`,
+including manual entries; enabling timestamp checking also reparses its issue
+time, so restarting cannot renew the token's lifetime.
+
+`require_completed` waits for a delimited SSE `response.completed` whose
+`response.status` is `completed`, even when state arrived in HTTP headers.
+Harvest candidates are isolated by request/account/model and promoted only by a
+successful terminal response (HTTP non-stream responses additionally require 2xx
+and `status: completed`). Failed, incomplete, truncated and `[DONE]`-only streams
+are rejected. WebSocket events use the same terminal check. CPA formats that do
+not expose the Codex completion marker cannot be harvested in this mode. This
+checks upstream completion, not whether the downstream client read every byte.
+Candidate storage is bounded and stale candidates expire after two minutes.
+
+`error_aware_backoff` queues early refresh for 429/502/503/504 and overload errors.
+`usage_limit_reached` / `insufficient_quota` take precedence over HTTP status and
+suppress all probes for that account for `quota_backoff_seconds` (default 900).
+Probe quota failures stop the current attempt loop; transient probe failures use
+the remaining `max_probe_attempts`. Backoff is in memory and resets on process
+restart. Refreshing state cannot restore account quota. `rotate_proxy_start`
+advances the pool's starting proxy once per proxy-probe round.

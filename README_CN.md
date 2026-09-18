@@ -54,7 +54,9 @@ plugins:
       harvest: true
       probe: true
       direct_probe: true
-      show_state_values: true
+      show_state_values: false
+      show_account_details: false
+      show_injection_headers: false
       probe_log_limit: 200
       max_probe_attempts: 3
       failure_reprobe_threshold: 3
@@ -94,20 +96,39 @@ plugins:
 1. CPA 本次实际选中的运行时账号 ID 与缓存账号完全一致；
 2. 解析后的上游模型与缓存模型完全一致；
 3. 账号和模型仍在配置范围中；
-4. state 长度正确且没有超过 TTL；
+4. 存在可用缓存（默认保留过期回退，`use_issued_at` 开启后严格检查真实年龄）；
 5. `inject: true`。
 
 匹配时会替换已有的同名请求头。轮询负载均衡如果选中了另一个账号，不会得到这个账号的 state。
 
 ## 状态页与手动探测
 
-```text
-/v0/resource/plugins/codex-turn-state/status
-```
+公开菜单地址 `/v0/resource/plugins/codex-turn-state/status` 只返回静态登录壳，
+不含运行数据；所有查询操作（包括原来的 `?format=json`）都被拒绝。输入 CPA
+管理密钥后加载原状态页，密钥只保留在本页内存，通过 `Authorization: Bearer ...`
+请求头发送，退出或刷新后清除。CPA 的远程管理限制仍然生效。
 
-- `GET .../status`：脱敏 HTML 状态页。
-- `GET .../status?format=json`：JSON 状态。
-- `POST .../status` 或 `GET .../status?op=probe`：立即排队执行一轮探测。
+数据与操作改为无 Menu 的 **受保护管理路由**：
+`/v0/management/plugins/codex-turn-state/status`。
+
+- `GET .../status`：受保护的 HTML 状态页。
+- `GET .../status?format=json`：受保护的 JSON 状态。
+- `GET .../status?op=fragment_probe_logs` / `fragment_injections`：受保护的局部刷新。
+- `POST .../status?op=probe` / `probe_target`：排队探测。
+- `POST .../status?op=save_manual_state` / `save_proxies` / `save_probe_accounts`：
+  用 URL 编码表单请求体保存。GET 写操作返回 405，state、代理凭据不再放入 URL。
+
+所有响应设置 `Cache-Control: no-store`。默认 HTML/JSON 不返回 state 原文、账号
+邮箱/名称/标签、注入请求头；可能含邮箱的 auth ID 也统一替换成稳定 SHA-256 别名，
+页面选择账号和操作会解析回真实 ID。`show_account_details: true` 显示真实身份；
+`show_injection_headers: true` 显示请求头，但其中 state 仍受 `show_state_values`
+控制，凭据头始终隐藏。上游错误原文不会经 HTTP 返回。
+
+鉴权由 CPA 管理中间件负责，插件无法读取或自行验证 CPA 管理密钥。不可另设绕过
+CPA 的无鉴权管理入口；应通过 HTTPS 保护传输中的密钥。获授权管理员仍能看到代理
+拓扑和显式开启的诊断数据。同源脚本和本地文件属于信任边界，账号别名仅为假名化，
+不提供不可猜测的匿名保证。运行缓存仍按原来的仅文件所有者可读写权限保存可用
+state，本改动不加密本地存储。
 
 页面顶部显示每个账号的彩色卡片，包含当前 state 长度、实时倒计时，以及当前窗口内的请求数、成功数、总 Token 和平均首字时间；下面显示最近探测和逐次代理尝试。命中目标长度的记录显示绿色，未命中或失败显示红色。页面永远不会显示代理用户名/密码或 Access Token。只有配置 `show_state_values: true` 后，后续捕获到的 state 原文才会进入页面和 JSON 日志；启用之前的记录不会恢复原文。
 
@@ -156,3 +177,43 @@ macOS 使用 `.dylib`，Linux 使用 `.so`，Windows 使用 `.dll`。推送 `v*`
 - state 是不透明的上游数据；长度符合要求不等于一定有效，也不保证任何路由、容量或账号效果。
 
 本独立仓库基于 CLIProxyAPI 的 `examples/plugin/codex-turn-state` 实现整理，并保留 MIT 许可证。
+
+### 可选的请求驱动生命周期
+
+默认仍使用 `fixed` 定时探测和原有采集行为。按需模式及严格校验可显式开启：
+
+```yaml
+probe_schedule: on_demand
+probe_wait_milliseconds: 1500
+probe_timeout_seconds: 60
+use_issued_at: true
+require_completed: true
+error_aware_backoff: true
+quota_backoff_seconds: 900
+rotate_proxy_start: true
+```
+
+`on_demand` 不做启动探测、不运行周期定时器；有请求时，仅在所选账号/模型缺少
+state 或进入 `probe_lead_seconds`（默认 300 秒）续期窗口时排队探测。同一桶的
+并发请求共用探测。手动探测、请求失败触发的重探仍可用，`probe: false` 和
+`probe_auth_ids` 仍生效。请求默认最多等 1500 毫秒，负值表示仅排队不等；超时后
+使用已有缓存或不注入，后台探测最多继续到 60 秒总超时。增大等待时间提高首个
+请求命中率，但会增加首包延迟。
+
+`use_issued_at` 无需密钥解析 Fernet 信封的版本、签发时间和块布局；不会解密或验证
+HMAC。保持目标长度检查，并拒绝无效、过期、明显来自未来的 state。开启后过期
+state 不再注入；默认仍保留旧版过期 state 回退。恢复缓存始终保留原 `StoredAt`，
+包括手动 state；开启此项还会重新解析真实签发时间，重启不会让令牌变年轻。
+
+`require_completed` 要求 SSE 正常分帧结束的 `response.completed`，且
+`response.status=completed`；响应头先带 state 也不能提前成功。采集候选按请求、
+账号、模型隔离，只在成功终态提升；非流式响应还要求 HTTP 2xx 和 `status=completed`。
+失败、截断、incomplete、只有 `[DONE]` 的流均不接受，WebSocket 同理。CPA 转换后
+不含 Codex 完成标记的格式会放弃采集。此处确认上游完成，无法确认客户端读完每个
+字节。候选数量/大小受限，两分钟后过期。
+
+`error_aware_backoff` 对 429/502/503/504、overload 提前排队重探；额度错误
+`usage_limit_reached` / `insufficient_quota` 优先于 HTTP 状态，按账号停止所有探测
+默认 900 秒。探测中的额度失败会终止本轮重试，临时错误在 `max_probe_attempts`
+范围内继续。退避只保存在内存，进程重启会重置；刷新 state 无法恢复账号额度。
+`rotate_proxy_start` 每轮代理探测递增起点，默认关闭。

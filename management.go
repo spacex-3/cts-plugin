@@ -32,6 +32,13 @@ type managementResponse struct {
 
 type managementRegistration struct {
 	Resources []managementResource `json:"resources,omitempty"`
+	Routes    []managementRoute    `json:"routes,omitempty"`
+}
+
+type managementRoute struct {
+	Method string `json:"Method"`
+	Path   string `json:"Path"`
+	Menu   string `json:"Menu,omitempty"`
 }
 
 type managementResource struct {
@@ -174,21 +181,54 @@ func handleManagement(raw []byte) ([]byte, error) {
 			return nil, fmt.Errorf("decode management request: %w", errUnmarshal)
 		}
 	}
+	// CPA passes the full path. Resource requests must never reach data or
+	// mutation handlers, even when callers add credentials or query parameters.
+	if req.Path == publicStatusPath && req.Method == http.MethodGet {
+		if len(req.Query) != 0 {
+			return managementJSON(http.StatusUnauthorized, map[string]string{"error": "Use the authenticated management endpoint"})
+		}
+		return okEnvelope(htmlResponse(http.StatusOK, []byte(statusLoginPage)))
+	}
+	if req.Path != managementStatusPath {
+		return managementJSON(http.StatusNotFound, map[string]string{"error": "not found"})
+	}
+	if req.Method != http.MethodGet && req.Method != http.MethodPost {
+		return managementJSON(http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+	}
+	if req.Query == nil {
+		req.Query = make(url.Values)
+	}
+	if req.Method == http.MethodPost && len(req.Body) > 0 {
+		values, err := url.ParseQuery(string(req.Body))
+		if err != nil {
+			return managementJSON(http.StatusBadRequest, map[string]string{"error": "invalid form"})
+		}
+		for key, value := range values {
+			req.Query[key] = value
+		}
+	}
 	op := strings.ToLower(strings.TrimSpace(req.Query.Get("op")))
 	if op == "" && strings.EqualFold(req.Method, http.MethodPost) {
 		op = "probe"
 	}
+	switch op {
+	case "probe", "probe_target", "save_proxies", "save_probe_accounts", "save_manual_state":
+		if req.Method != http.MethodPost {
+			return managementJSON(http.StatusMethodNotAllowed, map[string]string{"error": "mutations require POST"})
+		}
+	}
 	if op == "probe" {
 		currentRuntime().triggerProbe()
+		return managementJSON(http.StatusOK, map[string]any{"ok": true})
 	}
 	if op == "probe_target" {
-		authID := strings.TrimSpace(req.Query.Get("auth_id"))
+		authID := resolveStatusAuthID(strings.TrimSpace(req.Query.Get("auth_id")))
 		model := strings.TrimSpace(req.Query.Get("model"))
 		if authID == "" || model == "" {
 			return nil, fmt.Errorf("auth_id and model are required")
 		}
 		currentRuntime().triggerTargetProbe(makeCacheKey(authID, model))
-		return okEnvelope(map[string]any{"ok": true})
+		return managementJSON(http.StatusOK, map[string]any{"ok": true})
 	}
 	if op == "fragment_probe_logs" {
 		view := buildStatusView()
@@ -200,16 +240,11 @@ func handleManagement(raw []byte) ([]byte, error) {
 	}
 	if op == "save_proxies" {
 		scheme := strings.TrimSpace(req.Query.Get("scheme"))
-		lines := string(req.Body)
-		if parsed := req.Query.Get("proxy_lines"); parsed != "" || strings.Contains(lines, "proxy_lines=") {
-			if values, errValues := url.ParseQuery(lines); errValues == nil {
-				lines = values.Get("proxy_lines")
-			}
-		}
+		lines := req.Query.Get("proxy_lines")
 		if errSave := currentRuntime().applyProxyLines(lines, scheme); errSave != nil {
 			return nil, errSave
 		}
-		return okEnvelope(map[string]any{"ok": true, "saved": currentRuntime().configSnapshot().proxyLinesRaw()})
+		return managementJSON(http.StatusOK, map[string]any{"ok": true})
 	}
 	if op == "save_probe_accounts" {
 		rawForm := string(req.Body)
@@ -221,10 +256,13 @@ func handleManagement(raw []byte) ([]byte, error) {
 			rawForm = req.Query.Get("auth_ids")
 		}
 		authIDs := uniqueTrimmed(strings.Split(rawForm, ","))
+		for i := range authIDs {
+			authIDs[i] = resolveStatusAuthID(authIDs[i])
+		}
 		if errSave := currentRuntime().applyProbeAuthIDs(authIDs); errSave != nil {
 			return nil, errSave
 		}
-		return okEnvelope(map[string]any{"ok": true})
+		return managementJSON(http.StatusOK, map[string]any{"ok": true})
 	}
 	if op == "save_manual_state" {
 		form := req.Query
@@ -238,10 +276,11 @@ func handleManagement(raw []byte) ([]byte, error) {
 				state = values.Get("state")
 			}
 		}
+		authID = resolveStatusAuthID(authID)
 		if errSave := currentRuntime().applyManualState(authID, model, state); errSave != nil {
 			return nil, errSave
 		}
-		return okEnvelope(map[string]any{"ok": true})
+		return managementJSON(http.StatusOK, map[string]any{"ok": true})
 	}
 	view := buildStatusView()
 	if strings.EqualFold(strings.TrimSpace(req.Query.Get("format")), "json") {
@@ -251,10 +290,8 @@ func handleManagement(raw []byte) ([]byte, error) {
 		}
 		return okEnvelope(managementResponse{
 			StatusCode: http.StatusOK,
-			Headers: http.Header{
-				"Content-Type": []string{"application/json; charset=utf-8"},
-			},
-			Body: body,
+			Headers:    privateHeaders("application/json; charset=utf-8"),
+			Body:       body,
 		})
 	}
 	return okEnvelope(htmlResponse(http.StatusOK, renderStatusPage(view, op == "probe")))
@@ -294,7 +331,7 @@ func buildStatusView() statusView {
 		DirectProbe:             cfg.directProbeEnabled(),
 		ShowStateValues:         cfg.showStateValuesEnabled(),
 		ProbeLogLimit:           cfg.probeLogLimit(),
-		GlobalError:             snap.GlobalErr,
+		GlobalError:             visibleStatusError(snap.GlobalErr),
 	}
 	if !snap.NextProbeAt.IsZero() {
 		view.NextProbeAtUnix = snap.NextProbeAt.Unix()
@@ -304,7 +341,7 @@ func buildStatusView() statusView {
 			AuthID:       entry.AuthID,
 			Model:        entry.Model,
 			Length:       entry.Length,
-			AgeSeconds:   durationSeconds(snap.Now.Sub(entry.StoredAt)),
+			AgeSeconds:   durationSeconds(snap.Now.Sub(entry.freshnessTime())),
 			RemainingTTL: 0,
 			Source:       entry.Source,
 			State:        visibleState(entry.State, cfg.showStateValuesEnabled()),
@@ -317,9 +354,9 @@ func buildStatusView() statusView {
 			AuthID:        entry.AuthID,
 			Model:         entry.Model,
 			Length:        entry.Length,
-			AgeSeconds:    durationSeconds(snap.Now.Sub(entry.StoredAt)),
-			RemainingTTL:  durationSeconds(snap.TTL - snap.Now.Sub(entry.StoredAt)),
-			ExpiresAtUnix: entry.StoredAt.Add(snap.TTL).Unix(),
+			AgeSeconds:    durationSeconds(snap.Now.Sub(entry.freshnessTime())),
+			RemainingTTL:  durationSeconds(snap.TTL - snap.Now.Sub(entry.freshnessTime())),
+			ExpiresAtUnix: entry.freshnessTime().Add(snap.TTL).Unix(),
 			Source:        entry.Source,
 			State:         visibleState(entry.State, cfg.showStateValuesEnabled()),
 		})
@@ -334,7 +371,7 @@ func buildStatusView() statusView {
 		view.Probes = append(view.Probes, statusProbe{
 			AuthID:     record.AuthID,
 			Model:      record.Model,
-			LastError:  record.LastError,
+			LastError:  visibleStatusError(record.LastError),
 			LastLength: record.LastLength,
 			Accepted:   record.LastAccepted,
 			Source:     record.LastSource,
@@ -361,7 +398,7 @@ func buildStatusView() statusView {
 			Length:      entry.Length,
 			TargetMatch: entry.TargetMatch,
 			Cached:      entry.Cached,
-			Error:       entry.Error,
+			Error:       visibleStatusError(entry.Error),
 		})
 	}
 	for i := len(snap.Injections) - 1; i >= 0; i-- {
@@ -390,7 +427,7 @@ func buildStatusView() statusView {
 			RequestedModel:  entry.RequestedModel,
 			ReasoningEffort: entry.ReasoningEffort,
 			Endpoint:        endpoint,
-			Headers:         entry.Headers,
+			Headers:         visibleInjectionHeaders(entry.Headers, cfg),
 			Stream:          entry.Stream,
 			State:           visibleState(entry.State, cfg.showStateValuesEnabled()),
 			Length:          entry.Length,
@@ -408,7 +445,7 @@ func buildStatusView() statusView {
 	}
 	if files, errList := currentRuntime().host.AuthList(); errList != nil {
 		if view.GlobalError == "" {
-			view.GlobalError = errList.Error()
+			view.GlobalError = visibleStatusError(errList.Error())
 		}
 	} else {
 		for _, file := range files {
@@ -430,6 +467,7 @@ func buildStatusView() statusView {
 		})
 	}
 	view.Accounts = buildAccountCards(view.Auths, view.Models, cfg, snap, entryByKey)
+	redactStatusIdentities(&view, cfg)
 	return view
 }
 
@@ -469,8 +507,8 @@ func buildAccountCards(auths []statusAuth, models []string, cfg pluginConfig, sn
 				modelCard.Length = entry.Length
 				modelCard.Source = entry.Source
 				modelCard.State = visibleState(entry.State, cfg.showStateValuesEnabled())
-				modelCard.ExpiresAtUnix = entry.StoredAt.Add(snap.TTL).Unix()
-				modelCard.RemainingTTLSeconds = durationSeconds(snap.TTL - snap.Now.Sub(entry.StoredAt))
+				modelCard.ExpiresAtUnix = entry.freshnessTime().Add(snap.TTL).Unix()
+				modelCard.RemainingTTLSeconds = durationSeconds(snap.TTL - snap.Now.Sub(entry.freshnessTime()))
 			}
 			account.Models = append(account.Models, modelCard)
 		}
@@ -650,12 +688,13 @@ func renderStatusPage(view statusView, triggered bool) []byte {
 	out.WriteString("</div>")
 	out.WriteString("<p class=\"muted\">JSON: <code>?format=json</code></p>")
 	out.WriteString("<script>")
-	out.WriteString("var refreshBtn=document.getElementById('refresh-now');if(refreshBtn){refreshBtn.addEventListener('click',function(){location.reload();});}")
-	out.WriteString("var probeBtn=document.getElementById('probe-now'),probeStatus=document.getElementById('probe-status');if(probeBtn){probeBtn.addEventListener('click',function(){probeBtn.disabled=true;probeStatus.textContent='正在触发探测...';fetch(location.pathname+'?op=probe',{method:'GET'}).then(function(){probeStatus.textContent='已触发一轮探测，结果稍后刷新可见。';setTimeout(function(){probeBtn.disabled=false;},600);}).catch(function(){probeStatus.textContent='触发失败，请重试。';probeBtn.disabled=false;});});}")
-	out.WriteString("var saveBtn=document.getElementById('save-proxies'),proxyLines=document.getElementById('proxy-lines'),proxyScheme=document.getElementById('proxy-scheme'),proxyStatus=document.getElementById('proxy-status');if(saveBtn){saveBtn.addEventListener('click',function(){saveBtn.disabled=true;proxyStatus.textContent='正在保存...';fetch(location.pathname+'?op=save_proxies&scheme='+encodeURIComponent(proxyScheme.value)+'&proxy_lines='+encodeURIComponent(proxyLines.value)).then(function(r){return r.json().catch(function(){return{};});}).then(function(d){if(d&&d.ok){proxyStatus.textContent='已保存，开始探测。';}else{proxyStatus.textContent='保存失败，请检查格式。';}}).catch(function(){proxyStatus.textContent='保存失败，请重试。';}).finally(function(){saveBtn.disabled=false;});});}")
-	out.WriteString("var manualSaveBtn=document.getElementById('save-manual-state'),manualAuth=document.getElementById('manual-auth'),manualModel=document.getElementById('manual-model'),manualState=document.getElementById('manual-state'),manualStatus=document.getElementById('manual-status');if(manualSaveBtn){manualSaveBtn.addEventListener('click',function(){if(!manualState.value.trim()){manualStatus.textContent='请粘贴 state。';return;}manualSaveBtn.disabled=true;manualStatus.textContent='正在保存...';fetch(location.pathname+'?op=save_manual_state&auth_id='+encodeURIComponent(manualAuth.value)+'&model='+encodeURIComponent(manualModel.value)+'&state='+encodeURIComponent(manualState.value)).then(function(r){return r.json().catch(function(){return{};});}).then(function(d){manualStatus.textContent=d&&d.ok?'已保存并启用。':'保存失败，请检查账号/模型。';}).catch(function(){manualStatus.textContent='保存失败，请重试。';}).finally(function(){manualSaveBtn.disabled=false;});});}")
-	out.WriteString("var accountSaveBtn=document.getElementById('save-probe-accounts'),selectAll=document.getElementById('probe-select-all'),accountStatus=document.getElementById('probe-account-status');if(selectAll){selectAll.addEventListener('change',function(){document.querySelectorAll('.probe-account').forEach(function(el){el.checked=selectAll.checked;});});}if(accountSaveBtn){accountSaveBtn.addEventListener('click',function(){var ids=Array.from(document.querySelectorAll('.probe-account:checked')).map(function(el){return el.dataset.auth;});accountSaveBtn.disabled=true;if(accountStatus)accountStatus.textContent='正在保存...';fetch(location.pathname+'?op=save_probe_accounts&auth_ids='+encodeURIComponent(ids.join(','))).then(function(r){return r.json().catch(function(){return{};});}).then(function(d){if(accountStatus)accountStatus.textContent=d&&d.ok?'已保存，开始探测。':'保存失败。';}).catch(function(){if(accountStatus)accountStatus.textContent='保存失败，请重试。';}).finally(function(){accountSaveBtn.disabled=false;});});}")
-	out.WriteString("document.querySelectorAll('.model-probe').forEach(function(btn){btn.addEventListener('click',function(){btn.disabled=true;var old=btn.textContent;btn.textContent='探测中...';fetch(location.pathname+'?op=probe_target&auth_id='+encodeURIComponent(btn.dataset.auth)+'&model='+encodeURIComponent(btn.dataset.model)).then(function(){btn.textContent='已触发';}).catch(function(){btn.textContent=old;}).finally(function(){btn.disabled=false;});});});")
+	out.WriteString("function fetch(path,opts){return window.parent!==window&&window.parent.ctsFetch?window.parent.ctsFetch(path,opts):window.fetch(path,opts).then(function(r){if(!r.ok)throw new Error(\"HTTP \"+r.status);return r;});}function reloadStatus(){if(window.parent!==window&&window.parent.ctsReload){window.parent.ctsReload();}else{location.reload();}}")
+	out.WriteString("var refreshBtn=document.getElementById('refresh-now');if(refreshBtn){refreshBtn.addEventListener('click',function(){reloadStatus();});}")
+	out.WriteString("var probeBtn=document.getElementById('probe-now'),probeStatus=document.getElementById('probe-status');if(probeBtn){probeBtn.addEventListener('click',function(){probeBtn.disabled=true;probeStatus.textContent='正在触发探测...';fetch(location.pathname+'?op=probe',{method:'POST'}).then(function(){probeStatus.textContent='已触发一轮探测，结果稍后刷新可见。';setTimeout(function(){probeBtn.disabled=false;},600);}).catch(function(){probeStatus.textContent='触发失败，请重试。';probeBtn.disabled=false;});});}")
+	out.WriteString("var saveBtn=document.getElementById('save-proxies'),proxyLines=document.getElementById('proxy-lines'),proxyScheme=document.getElementById('proxy-scheme'),proxyStatus=document.getElementById('proxy-status');if(saveBtn){saveBtn.addEventListener('click',function(){saveBtn.disabled=true;proxyStatus.textContent='正在保存...';fetch(location.pathname+'?op=save_proxies',{method:'POST',body:new URLSearchParams({scheme:proxyScheme.value,proxy_lines:proxyLines.value})}).then(function(r){return r.json().catch(function(){return{};});}).then(function(d){if(d&&d.ok){proxyStatus.textContent='已保存，开始探测。';}else{proxyStatus.textContent='保存失败，请检查格式。';}}).catch(function(){proxyStatus.textContent='保存失败，请重试。';}).finally(function(){saveBtn.disabled=false;});});}")
+	out.WriteString("var manualSaveBtn=document.getElementById('save-manual-state'),manualAuth=document.getElementById('manual-auth'),manualModel=document.getElementById('manual-model'),manualState=document.getElementById('manual-state'),manualStatus=document.getElementById('manual-status');if(manualSaveBtn){manualSaveBtn.addEventListener('click',function(){if(!manualState.value.trim()){manualStatus.textContent='请粘贴 state。';return;}manualSaveBtn.disabled=true;manualStatus.textContent='正在保存...';fetch(location.pathname+'?op=save_manual_state',{method:'POST',body:new URLSearchParams({auth_id:manualAuth.value,model:manualModel.value,state:manualState.value})}).then(function(r){return r.json().catch(function(){return{};});}).then(function(d){manualStatus.textContent=d&&d.ok?'已保存并启用。':'保存失败，请检查账号/模型。';}).catch(function(){manualStatus.textContent='保存失败，请重试。';}).finally(function(){manualSaveBtn.disabled=false;});});}")
+	out.WriteString("var accountSaveBtn=document.getElementById('save-probe-accounts'),selectAll=document.getElementById('probe-select-all'),accountStatus=document.getElementById('probe-account-status');if(selectAll){selectAll.addEventListener('change',function(){document.querySelectorAll('.probe-account').forEach(function(el){el.checked=selectAll.checked;});});}if(accountSaveBtn){accountSaveBtn.addEventListener('click',function(){var ids=Array.from(document.querySelectorAll('.probe-account:checked')).map(function(el){return el.dataset.auth;});accountSaveBtn.disabled=true;if(accountStatus)accountStatus.textContent='正在保存...';fetch(location.pathname+'?op=save_probe_accounts',{method:'POST',body:new URLSearchParams({auth_ids:ids.join(',')})}).then(function(r){return r.json().catch(function(){return{};});}).then(function(d){if(accountStatus)accountStatus.textContent=d&&d.ok?'已保存，开始探测。':'保存失败。';}).catch(function(){if(accountStatus)accountStatus.textContent='保存失败，请重试。';}).finally(function(){accountSaveBtn.disabled=false;});});}")
+	out.WriteString("document.querySelectorAll('.model-probe').forEach(function(btn){btn.addEventListener('click',function(){btn.disabled=true;var old=btn.textContent;btn.textContent='探测中...';fetch(location.pathname+'?op=probe_target',{method:'POST',body:new URLSearchParams({auth_id:btn.dataset.auth,model:btn.dataset.model})}).then(function(){btn.textContent='已触发';}).catch(function(){btn.textContent=old;}).finally(function(){btn.disabled=false;});});});")
 	out.WriteString("var probeRows=[],probePage=0,probeSize=10;function filteredProbeRows(){var auth=document.getElementById('probe-filter-auth'),model=document.getElementById('probe-filter-model'),match=document.getElementById('probe-filter-match');return probeRows.filter(function(r){return (!auth||!auth.value||r.dataset.auth===auth.value)&&(!model||!model.value||r.dataset.model===model.value)&&(!match||!match.value||r.dataset.match===match.value);});}function renderProbePage(){var rows=filteredProbeRows(),pages=Math.ceil(rows.length/probeSize)||1;if(probePage>=pages)probePage=Math.max(0,pages-1);probeRows.forEach(function(r){r.style.display='none';});rows.slice(probePage*probeSize,probePage*probeSize+probeSize).forEach(function(r){r.style.display='';});var info=document.getElementById('probe-log-info');if(info)info.textContent=rows.length?(probePage+1)+'/'+pages+' 页 · '+rows.length+' 条':'0 条';}function bindProbePage(){var auth=document.getElementById('probe-filter-auth'),model=document.getElementById('probe-filter-model'),match=document.getElementById('probe-filter-match');[auth,model,match].forEach(function(sel){if(sel)sel.addEventListener('change',function(){probePage=0;renderProbePage();});});var prev=document.getElementById('probe-log-prev'),next=document.getElementById('probe-log-next');if(prev)prev.addEventListener('click',function(){probePage=Math.max(0,probePage-1);renderProbePage();});if(next)next.addEventListener('click',function(){probePage++;renderProbePage();});}function initProbeLogs(){probeRows=Array.prototype.slice.call(document.querySelectorAll('.probe-log-row'));probePage=0;if(probeRows.length){renderProbePage();bindProbePage();}}")
 	out.WriteString("var injectionRows=[],injectionPage=0,injectionSize=10;function renderInjectionPage(){var pages=Math.ceil(injectionRows.length/injectionSize)||1;if(injectionPage>=pages)injectionPage=Math.max(0,pages-1);injectionRows.forEach(function(r){r.style.display='none';});injectionRows.slice(injectionPage*injectionSize,injectionPage*injectionSize+injectionSize).forEach(function(r){r.style.display='';});var info=document.getElementById('injection-info');if(info)info.textContent=injectionRows.length?(injectionPage+1)+'/'+pages+' 页 · '+injectionRows.length+' 条':'0 条';}function bindInjectionPage(){var prev=document.getElementById('injection-prev'),next=document.getElementById('injection-next');if(prev)prev.addEventListener('click',function(){injectionPage=Math.max(0,injectionPage-1);renderInjectionPage();});if(next)next.addEventListener('click',function(){injectionPage++;renderInjectionPage();});}function initInjectionTable(){injectionRows=Array.prototype.slice.call(document.querySelectorAll('.injection-row'));injectionPage=0;if(injectionRows.length){renderInjectionPage();bindInjectionPage();}}")
 	out.WriteString("function bindSectionRefresh(btnId,sectionId,op){var btn=document.getElementById(btnId),section=document.getElementById(sectionId);if(!btn||!section)return;btn.addEventListener('click',function(){btn.disabled=true;fetch(location.pathname+'?op='+op).then(function(r){return r.text();}).then(function(html){var div=document.createElement('div');div.innerHTML=html;section.innerHTML=div.innerHTML;if(op==='fragment_probe_logs'){initProbeLogs();}else if(op==='fragment_injections'){initInjectionTable();}}).finally(function(){btn=document.getElementById(btnId);if(btn)btn.disabled=false;});});}bindSectionRefresh('probe-refresh','probe-logs-section','fragment_probe_logs');bindSectionRefresh('injection-refresh','injection-section','fragment_injections');initProbeLogs();initInjectionTable();")
@@ -997,10 +1036,8 @@ func writeCell(out *bytes.Buffer, value string) {
 func htmlResponse(statusCode int, body []byte) managementResponse {
 	return managementResponse{
 		StatusCode: statusCode,
-		Headers: http.Header{
-			"Content-Type": []string{resourceContentType},
-		},
-		Body: body,
+		Headers:    privateHeaders(resourceContentType),
+		Body:       body,
 	}
 }
 

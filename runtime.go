@@ -15,22 +15,27 @@ import (
 )
 
 type pluginRuntime struct {
-	mu            sync.Mutex
-	config        pluginConfig
-	cache         *stateCache
-	statuses      map[cacheKey]probeRecord
-	windows       map[cacheKey]windowStats
-	probeLogs     []probeLogEntry
-	injections    []injectionLogEntry
-	globalErr     string
-	host          hostAPI
-	transport     probeTransport
-	nowFunc       func() time.Time
-	trigger       chan struct{}
-	targetTrigger chan cacheKey
-	nextProbeAt   time.Time
-	cancel        context.CancelFunc
-	wg            sync.WaitGroup
+	mu             sync.Mutex
+	config         pluginConfig
+	cache          *stateCache
+	statuses       map[cacheKey]probeRecord
+	windows        map[cacheKey]windowStats
+	probeLogs      []probeLogEntry
+	injections     []injectionLogEntry
+	globalErr      string
+	host           hostAPI
+	transport      probeTransport
+	nowFunc        func() time.Time
+	trigger        chan struct{}
+	targetTrigger  chan cacheKey
+	nextProbeAt    time.Time
+	demandTrigger  chan demandProbe
+	demandPending  map[cacheKey]chan struct{}
+	quotaUntil     map[string]time.Time
+	poolCursor     uint64
+	harvestPending map[harvestKey]*harvestCandidate
+	cancel         context.CancelFunc
+	wg             sync.WaitGroup
 }
 
 type probeLogEntry struct {
@@ -96,16 +101,20 @@ var rt = newRuntime()
 func newRuntime() *pluginRuntime {
 	cfg := normalizeConfig(pluginConfig{})
 	return &pluginRuntime{
-		config:        cfg,
-		cache:         newStateCache(cfg.ttl(), cfg.targetLength(), time.Now),
-		statuses:      make(map[cacheKey]probeRecord),
-		windows:       make(map[cacheKey]windowStats),
-		injections:    make([]injectionLogEntry, 0),
-		host:          liveHost{},
-		transport:     utlsProbeTransport{},
-		nowFunc:       time.Now,
-		trigger:       make(chan struct{}, 1),
-		targetTrigger: make(chan cacheKey, 64),
+		config:         cfg,
+		cache:          newStateCache(cfg.ttl(), cfg.targetLength(), time.Now),
+		statuses:       make(map[cacheKey]probeRecord),
+		windows:        make(map[cacheKey]windowStats),
+		injections:     make([]injectionLogEntry, 0),
+		host:           liveHost{},
+		transport:      utlsProbeTransport{},
+		nowFunc:        time.Now,
+		trigger:        make(chan struct{}, 1),
+		targetTrigger:  make(chan cacheKey, 64),
+		demandTrigger:  make(chan demandProbe, 64),
+		demandPending:  make(map[cacheKey]chan struct{}),
+		quotaUntil:     make(map[string]time.Time),
+		harvestPending: make(map[harvestKey]*harvestCandidate),
 	}
 }
 
@@ -148,11 +157,13 @@ func (r *pluginRuntime) applyConfig(cfg pluginConfig) error {
 		nowFunc = time.Now
 	}
 	r.config = clonePluginConfig(cfg)
+	r.harvestPending = make(map[harvestKey]*harvestCandidate)
 	if r.cache == nil {
 		r.cache = newStateCache(cfg.ttl(), cfg.targetLength(), nowFunc)
 	} else {
 		r.cache.reconfigure(cfg.ttl(), cfg.targetLength(), nowFunc)
 	}
+	r.cache.configureIssuedAt(cfg.UseIssuedAt)
 	if r.statuses == nil {
 		r.statuses = make(map[cacheKey]probeRecord)
 	}
@@ -186,11 +197,7 @@ func restorePersistedRuntimeLocked(r *pluginRuntime, cfg pluginConfig) {
 	file := loadPersistedRuntimeFile()
 	if len(file.Entries) > 0 {
 		for _, entry := range file.Entries {
-			if entry.Source == "manual" {
-				_, _ = r.cache.putManual(entry.AuthID, entry.Model, entry.State)
-			} else {
-				_, _, _ = r.cache.storeTarget(entry.AuthID, entry.Model, entry.State, entry.Source, true)
-			}
+			r.cache.restore(entry)
 		}
 	}
 	limit := cfg.probeLogLimit()
@@ -447,6 +454,17 @@ func (r *pluginRuntime) handleUsage(record pluginapi.UsageRecord) {
 	if !cfg.allows(key.AuthID, key.Model) {
 		return
 	}
+	failureHandled := false
+	if cfg.ErrorAwareBackoff && record.Failed {
+		switch classifyFailure(record.Failure.StatusCode, record.Failure.Body) {
+		case failureQuota:
+			r.deferQuota(key.AuthID, cfg)
+			failureHandled = true
+		case failureTransient:
+			r.triggerTargetProbe(key)
+			failureHandled = true
+		}
+	}
 	entry, ok := r.cache.lookup(key.AuthID, key.Model)
 	if !ok {
 		return
@@ -484,7 +502,7 @@ func (r *pluginRuntime) handleUsage(record pluginapi.UsageRecord) {
 		stats.ConsecutiveFailures++
 		stats.LastFailure = firstNonEmpty(record.Failure.Body, httpStatusText(record.Failure.StatusCode))
 		threshold := cfg.failureReprobeThreshold()
-		if threshold > 0 && stats.ConsecutiveFailures >= threshold && !stats.ReprobeQueued {
+		if !failureHandled && threshold > 0 && stats.ConsecutiveFailures >= threshold && !stats.ReprobeQueued {
 			stats.ReprobeQueued = true
 			queueProbe = true
 		}
