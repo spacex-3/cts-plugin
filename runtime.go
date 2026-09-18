@@ -18,6 +18,7 @@ type pluginRuntime struct {
 	statuses      map[cacheKey]probeRecord
 	windows       map[cacheKey]windowStats
 	probeLogs     []probeLogEntry
+	injections    []injectionLogEntry
 	globalErr     string
 	host          hostAPI
 	transport     probeTransport
@@ -40,6 +41,14 @@ type probeLogEntry struct {
 	TargetMatch bool
 	Cached      bool
 	Error       string
+}
+
+type injectionLogEntry struct {
+	Time   time.Time
+	AuthID string
+	Model  string
+	Length int
+	Source string
 }
 
 type windowStats struct {
@@ -68,6 +77,7 @@ func newRuntime() *pluginRuntime {
 		cache:         newStateCache(cfg.ttl(), cfg.targetLength(), time.Now),
 		statuses:      make(map[cacheKey]probeRecord),
 		windows:       make(map[cacheKey]windowStats),
+		injections:    make([]injectionLogEntry, 0),
 		host:          liveHost{},
 		transport:     utlsProbeTransport{},
 		nowFunc:       time.Now,
@@ -128,6 +138,9 @@ func (r *pluginRuntime) applyConfig(cfg pluginConfig) error {
 	}
 	if r.targetTrigger == nil {
 		r.targetTrigger = make(chan cacheKey, 64)
+	}
+	if r.injections == nil {
+		r.injections = make([]injectionLogEntry, 0)
 	}
 	if len(r.probeLogs) > cfg.probeLogLimit() {
 		r.probeLogs = append([]probeLogEntry(nil), r.probeLogs[len(r.probeLogs)-cfg.probeLogLimit():]...)
@@ -265,6 +278,25 @@ func (r *pluginRuntime) recordObservation(authID, model, state string, accepted 
 	r.statuses[key] = record
 }
 
+func (r *pluginRuntime) recordInjection(authID, model string, entry cacheEntry) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	limit := r.config.probeLogLimit()
+	r.injections = append(r.injections, injectionLogEntry{
+		Time:   r.now(),
+		AuthID: strings.TrimSpace(authID),
+		Model:  strings.TrimSpace(model),
+		Length: entry.Length,
+		Source: entry.Source,
+	})
+	if len(r.injections) > limit {
+		r.injections = append([]injectionLogEntry(nil), r.injections[len(r.injections)-limit:]...)
+	}
+}
+
 func (r *pluginRuntime) recordProbeAttempt(target probeTarget, route string, attempt int, state string, targetMatch, cached bool, errText string) {
 	r.recordProbeAttemptWithProxy(target, route, "", attempt, state, targetMatch, cached, errText)
 }
@@ -397,29 +429,32 @@ func (r *pluginRuntime) snapshotStatus() runtimeSnapshot {
 		windows[key] = stats
 	}
 	logs := append([]probeLogEntry(nil), r.probeLogs...)
+	injections := append([]injectionLogEntry(nil), r.injections...)
 	r.mu.Unlock()
 	entries := r.cache.snapshot()
 	return runtimeSnapshot{
-		Config:    cfg,
-		GlobalErr: globalErr,
-		Entries:   entries,
-		Records:   records,
-		Windows:   windows,
-		Logs:      logs,
-		Now:       r.now(),
-		TTL:       cfg.ttl(),
-		TargetLen: cfg.targetLength(),
+		Config:     cfg,
+		GlobalErr:  globalErr,
+		Entries:    entries,
+		Records:    records,
+		Windows:    windows,
+		Logs:       logs,
+		Injections: injections,
+		Now:        r.now(),
+		TTL:        cfg.ttl(),
+		TargetLen:  cfg.targetLength(),
 	}
 }
 
 type runtimeSnapshot struct {
-	Config    pluginConfig
-	GlobalErr string
-	Entries   []cacheEntry
-	Records   []probeRecord
-	Windows   map[cacheKey]windowStats
-	Logs      []probeLogEntry
-	Now       time.Time
-	TTL       time.Duration
-	TargetLen int
+	Config     pluginConfig
+	GlobalErr  string
+	Entries    []cacheEntry
+	Records    []probeRecord
+	Windows    map[cacheKey]windowStats
+	Logs       []probeLogEntry
+	Injections []injectionLogEntry
+	Now        time.Time
+	TTL        time.Duration
+	TargetLen  int
 }

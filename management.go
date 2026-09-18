@@ -41,27 +41,28 @@ type managementResource struct {
 }
 
 type statusView struct {
-	Proxy                   string           `json:"proxy"`
-	Proxies                 []string         `json:"proxies"`
-	AuthIDs                 []string         `json:"auth_ids"`
-	Models                  []string         `json:"models"`
-	IntervalSeconds         int              `json:"interval_seconds"`
-	TargetStateLength       int              `json:"target_state_length"`
-	TTLSeconds              int              `json:"ttl_seconds"`
-	FailureReprobeThreshold int              `json:"failure_reprobe_threshold"`
-	MaxProbeAttempts        int              `json:"max_probe_attempts"`
-	Inject                  bool             `json:"inject"`
-	Harvest                 bool             `json:"harvest"`
-	Probe                   bool             `json:"probe"`
-	DirectProbe             bool             `json:"direct_probe"`
-	ShowStateValues         bool             `json:"show_state_values"`
-	ProbeLogLimit           int              `json:"probe_log_limit"`
-	GlobalError             string           `json:"global_error,omitempty"`
-	Accounts                []statusAccount  `json:"accounts"`
-	States                  []statusState    `json:"states"`
-	Probes                  []statusProbe    `json:"probes"`
-	ProbeLogs               []statusProbeLog `json:"probe_logs"`
-	Auths                   []statusAuth     `json:"auths"`
+	Proxy                   string            `json:"proxy"`
+	Proxies                 []string          `json:"proxies"`
+	AuthIDs                 []string          `json:"auth_ids"`
+	Models                  []string          `json:"models"`
+	IntervalSeconds         int               `json:"interval_seconds"`
+	TargetStateLength       int               `json:"target_state_length"`
+	TTLSeconds              int               `json:"ttl_seconds"`
+	FailureReprobeThreshold int               `json:"failure_reprobe_threshold"`
+	MaxProbeAttempts        int               `json:"max_probe_attempts"`
+	Inject                  bool              `json:"inject"`
+	Harvest                 bool              `json:"harvest"`
+	Probe                   bool              `json:"probe"`
+	DirectProbe             bool              `json:"direct_probe"`
+	ShowStateValues         bool              `json:"show_state_values"`
+	ProbeLogLimit           int               `json:"probe_log_limit"`
+	GlobalError             string            `json:"global_error,omitempty"`
+	Accounts                []statusAccount   `json:"accounts"`
+	States                  []statusState     `json:"states"`
+	Probes                  []statusProbe     `json:"probes"`
+	ProbeLogs               []statusProbeLog  `json:"probe_logs"`
+	Injections              []statusInjection `json:"injections"`
+	Auths                   []statusAuth      `json:"auths"`
 }
 
 type statusState struct {
@@ -98,6 +99,15 @@ type statusProbeLog struct {
 	TargetMatch bool   `json:"target_match"`
 	Cached      bool   `json:"cached"`
 	Error       string `json:"error,omitempty"`
+}
+
+type statusInjection struct {
+	Time       string `json:"time"`
+	AuthID     string `json:"auth_id"`
+	Model      string `json:"model"`
+	Length     int    `json:"length"`
+	Source     string `json:"source,omitempty"`
+	AgeSeconds int    `json:"age_seconds"`
 }
 
 type statusAuth struct {
@@ -283,6 +293,17 @@ func buildStatusView() statusView {
 			TargetMatch: entry.TargetMatch,
 			Cached:      entry.Cached,
 			Error:       entry.Error,
+		})
+	}
+	for i := len(snap.Injections) - 1; i >= 0; i-- {
+		entry := snap.Injections[i]
+		view.Injections = append(view.Injections, statusInjection{
+			Time:       entry.Time.Format(time.RFC3339),
+			AuthID:     entry.AuthID,
+			Model:      entry.Model,
+			Length:     entry.Length,
+			Source:     entry.Source,
+			AgeSeconds: durationSeconds(snap.Now.Sub(entry.Time)),
 		})
 	}
 	if files, errList := currentRuntime().host.AuthList(); errList != nil {
@@ -485,6 +506,24 @@ func renderStatusPage(view statusView, triggered bool) []byte {
 			writeCell(&out, fmt.Sprintf("%t", entry.Cached))
 			writeCell(&out, stateDisplay(entry.State, view.ShowStateValues))
 			writeCell(&out, entry.Error)
+			out.WriteString("</tr>")
+		}
+		out.WriteString("</tbody></table>")
+	}
+	out.WriteString("</div>")
+
+	out.WriteString("<div class=\"section\"><div class=\"section-title\">注入记录</div>")
+	if len(view.Injections) == 0 {
+		out.WriteString("<p class=\"muted\">暂无注入记录。</p>")
+	} else {
+		out.WriteString("<table><thead><tr><th>时间</th><th>账号</th><th>模型</th><th>长度</th><th>来源</th></tr></thead><tbody>")
+		for _, entry := range view.Injections {
+			out.WriteString("<tr>")
+			writeCell(&out, entry.Time)
+			writeCell(&out, entry.AuthID)
+			writeCell(&out, entry.Model)
+			writeCell(&out, fmt.Sprintf("%d", entry.Length))
+			writeCell(&out, entry.Source)
 			out.WriteString("</tr>")
 		}
 		out.WriteString("</tbody></table>")

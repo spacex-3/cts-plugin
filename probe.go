@@ -183,6 +183,9 @@ func (rt *pluginRuntime) probeDirectBaseline(ctx context.Context, target probeTa
 		errText = fmt.Sprintf("turn state length %d does not match target %d", len(strings.TrimSpace(state)), cfg.targetLength())
 	}
 	rt.recordProbeAttempt(target, "direct", 0, state, targetMatch, false, errText)
+	if targetMatch {
+		rt.observeState(target.AuthID, target.Model, state, "direct")
+	}
 }
 
 func (rt *pluginRuntime) probeTarget(ctx context.Context, proxyURL string, target probeTarget) {
