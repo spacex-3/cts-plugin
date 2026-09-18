@@ -104,12 +104,26 @@ type statusProbeLog struct {
 }
 
 type statusInjection struct {
-	Time       string `json:"time"`
-	AuthID     string `json:"auth_id"`
-	Model      string `json:"model"`
-	Length     int    `json:"length"`
-	Source     string `json:"source,omitempty"`
-	AgeSeconds int    `json:"age_seconds"`
+	Time            string  `json:"time"`
+	RequestID       string  `json:"request_id,omitempty"`
+	AuthID          string  `json:"auth_id"`
+	Model           string  `json:"model"`
+	RequestedModel  string  `json:"requested_model,omitempty"`
+	ReasoningEffort string  `json:"reasoning_effort,omitempty"`
+	Endpoint        string  `json:"endpoint,omitempty"`
+	Stream          bool    `json:"stream"`
+	State           string  `json:"state,omitempty"`
+	Length          int     `json:"length"`
+	InputTokens     int64   `json:"input_tokens"`
+	OutputTokens    int64   `json:"output_tokens"`
+	ReasoningTokens int64   `json:"reasoning_tokens"`
+	TotalTokens     int64   `json:"total_tokens"`
+	TTFTSeconds     float64 `json:"ttft_seconds"`
+	LatencySeconds  float64 `json:"latency_seconds"`
+	TPS             float64 `json:"tps"`
+	Failed          bool    `json:"failed"`
+	Source          string  `json:"source,omitempty"`
+	AgeSeconds      int     `json:"age_seconds"`
 }
 
 type statusAuth struct {
@@ -330,13 +344,38 @@ func buildStatusView() statusView {
 	}
 	for i := len(snap.Injections) - 1; i >= 0; i-- {
 		entry := snap.Injections[i]
+		tps := 0.0
+		if entry.Latency > 0 && entry.OutputTokens > 0 {
+			tps = float64(entry.OutputTokens) / entry.Latency.Seconds()
+		}
+		endpoint := entry.ToFormat
+		if entry.SourceFormat != "" && entry.SourceFormat != entry.ToFormat {
+			endpoint = entry.SourceFormat + " → " + entry.ToFormat
+		}
+		if entry.Stream {
+			endpoint += " (stream)"
+		}
 		view.Injections = append(view.Injections, statusInjection{
-			Time:       entry.Time.Format(time.RFC3339),
-			AuthID:     entry.AuthID,
-			Model:      entry.Model,
-			Length:     entry.Length,
-			Source:     entry.Source,
-			AgeSeconds: durationSeconds(snap.Now.Sub(entry.Time)),
+			Time:            entry.Time.Format(time.RFC3339),
+			RequestID:       entry.RequestID,
+			AuthID:          entry.AuthID,
+			Model:           entry.Model,
+			RequestedModel:  entry.RequestedModel,
+			ReasoningEffort: entry.ReasoningEffort,
+			Endpoint:        endpoint,
+			Stream:          entry.Stream,
+			State:           visibleState(entry.State, cfg.showStateValuesEnabled()),
+			Length:          entry.Length,
+			InputTokens:     entry.InputTokens,
+			OutputTokens:    entry.OutputTokens,
+			ReasoningTokens: entry.ReasoningTokens,
+			TotalTokens:     entry.TotalTokens,
+			TTFTSeconds:     entry.TTFT.Seconds(),
+			LatencySeconds:  entry.Latency.Seconds(),
+			TPS:             tps,
+			Failed:          entry.Failed,
+			Source:          entry.Source,
+			AgeSeconds:      durationSeconds(snap.Now.Sub(entry.Time)),
 		})
 	}
 	if files, errList := currentRuntime().host.AuthList(); errList != nil {
@@ -625,13 +664,40 @@ func renderStatusPage(view statusView, triggered bool) []byte {
 	if len(view.Injections) == 0 {
 		out.WriteString("<p class=\"muted\">暂无注入记录。</p>")
 	} else {
-		out.WriteString("<table id=\"injection-table\"><thead><tr><th>时间</th><th>账号</th><th>模型</th><th>长度</th><th>来源</th></tr></thead><tbody>")
+		out.WriteString("<table id=\"injection-table\"><thead><tr><th>时间</th><th>账号</th><th>模型</th><th>推理强度</th><th>端点</th><th>TPS</th><th>Token</th><th>首字</th><th>延迟</th><th>结果</th><th>State 请求头</th><th>来源</th></tr></thead><tbody>")
 		for _, entry := range view.Injections {
 			out.WriteString("<tr class=\"injection-row\">")
 			writeCell(&out, entry.Time)
 			writeCell(&out, entry.AuthID)
 			writeCell(&out, entry.Model)
-			writeCell(&out, fmt.Sprintf("%d", entry.Length))
+			writeCell(&out, entry.ReasoningEffort)
+			writeCell(&out, entry.Endpoint)
+			if entry.TPS > 0 {
+				writeCell(&out, fmt.Sprintf("%.1f", entry.TPS))
+			} else {
+				writeCell(&out, "—")
+			}
+			writeCell(&out, fmt.Sprintf("%d", entry.TotalTokens))
+			if entry.TTFTSeconds > 0 {
+				writeCell(&out, fmt.Sprintf("%.2fs", entry.TTFTSeconds))
+			} else {
+				writeCell(&out, "—")
+			}
+			if entry.LatencySeconds > 0 {
+				writeCell(&out, fmt.Sprintf("%.2fs", entry.LatencySeconds))
+			} else {
+				writeCell(&out, "—")
+			}
+			if entry.Failed {
+				writeCell(&out, "失败")
+			} else {
+				writeCell(&out, "成功")
+			}
+			out.WriteString("<td><code title=\"")
+			out.WriteString(html.EscapeString(entry.State))
+			out.WriteString("\">")
+			out.WriteString(html.EscapeString(truncate(entry.State, 48)))
+			out.WriteString("</code></td>")
 			writeCell(&out, entry.Source)
 			out.WriteString("</tr>")
 		}

@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
 
@@ -45,11 +46,28 @@ type probeLogEntry struct {
 }
 
 type injectionLogEntry struct {
-	Time   time.Time
-	AuthID string
-	Model  string
-	Length int
-	Source string
+	Time            time.Time
+	RequestID       string
+	TraceID         string
+	SourceFormat    string
+	ToFormat        string
+	RequestedModel  string
+	Stream          bool
+	ReasoningEffort string
+	SessionID       string
+	AuthID          string
+	Model           string
+	Length          int
+	Source          string
+	State           string
+	UsageAttached   bool
+	InputTokens     int64
+	OutputTokens    int64
+	ReasoningTokens int64
+	TotalTokens     int64
+	TTFT            time.Duration
+	Latency         time.Duration
+	Failed          bool
 }
 
 type windowStats struct {
@@ -328,7 +346,7 @@ func (r *pluginRuntime) recordObservation(authID, model, state string, accepted 
 	r.persistLocked()
 }
 
-func (r *pluginRuntime) recordInjection(authID, model string, entry cacheEntry) {
+func (r *pluginRuntime) recordInjection(req pluginapi.RequestInterceptRequest, entry cacheEntry) {
 	if r == nil {
 		return
 	}
@@ -336,11 +354,20 @@ func (r *pluginRuntime) recordInjection(authID, model string, entry cacheEntry) 
 	defer r.mu.Unlock()
 	limit := r.config.probeLogLimit()
 	r.injections = append(r.injections, injectionLogEntry{
-		Time:   r.now(),
-		AuthID: strings.TrimSpace(authID),
-		Model:  strings.TrimSpace(model),
-		Length: entry.Length,
-		Source: entry.Source,
+		Time:            r.now(),
+		RequestID:       strings.TrimSpace(req.RequestID),
+		TraceID:         strings.TrimSpace(req.TraceID),
+		SourceFormat:    strings.TrimSpace(req.SourceFormat),
+		ToFormat:        strings.TrimSpace(req.ToFormat),
+		RequestedModel:  strings.TrimSpace(req.RequestedModel),
+		Stream:          req.Stream,
+		ReasoningEffort: metadataString(req.Metadata, cliproxyexecutor.ReasoningEffortMetadataKey),
+		SessionID:       firstNonEmpty(metadataString(req.Metadata, cliproxyexecutor.CanonicalSessionIDMetadataKey), metadataString(req.Metadata, cliproxyexecutor.ExecutionSessionMetadataKey)),
+		AuthID:          strings.TrimSpace(entry.AuthID),
+		Model:           strings.TrimSpace(entry.Model),
+		Length:          entry.Length,
+		Source:          entry.Source,
+		State:           entry.State,
 	})
 	if len(r.injections) > limit {
 		r.injections = append([]injectionLogEntry(nil), r.injections[len(r.injections)-limit:]...)
@@ -439,6 +466,7 @@ func (r *pluginRuntime) handleUsage(record pluginapi.UsageRecord) {
 	}
 	r.windows[key] = stats
 	r.mu.Unlock()
+	r.attachUsageToInjection(record)
 
 	if queueProbe && !r.triggerTargetProbe(key) {
 		r.mu.Lock()
@@ -446,6 +474,44 @@ func (r *pluginRuntime) handleUsage(record pluginapi.UsageRecord) {
 		stats.ReprobeQueued = false
 		r.windows[key] = stats
 		r.mu.Unlock()
+	}
+}
+
+func (r *pluginRuntime) attachUsageToInjection(record pluginapi.UsageRecord) {
+	if r == nil {
+		return
+	}
+	requestedAt := record.RequestedAt
+	if requestedAt.IsZero() {
+		requestedAt = r.now()
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := len(r.injections) - 1; i >= 0; i-- {
+		entry := &r.injections[i]
+		if entry.UsageAttached || entry.AuthID != record.AuthID || entry.Model != record.Model {
+			continue
+		}
+		if record.SessionID != "" && entry.SessionID != "" && record.SessionID != entry.SessionID {
+			continue
+		}
+		delta := requestedAt.Sub(entry.Time)
+		if delta < -2*time.Minute || delta > 10*time.Minute {
+			continue
+		}
+		entry.UsageAttached = true
+		entry.InputTokens = record.Detail.InputTokens
+		entry.OutputTokens = record.Detail.OutputTokens
+		entry.ReasoningTokens = record.Detail.ReasoningTokens
+		totalTokens := record.Detail.TotalTokens
+		if totalTokens == 0 {
+			totalTokens = record.Detail.InputTokens + record.Detail.OutputTokens
+		}
+		entry.TotalTokens = totalTokens
+		entry.TTFT = record.TTFT
+		entry.Latency = record.Latency
+		entry.Failed = record.Failed
+		return
 	}
 }
 

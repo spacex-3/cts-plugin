@@ -44,7 +44,7 @@ func applyAfterAuth(req pluginapi.RequestInterceptRequest) pluginapi.RequestInte
 	if !ok || strings.TrimSpace(entry.State) == "" {
 		return pluginapi.RequestInterceptResponse{}
 	}
-	rt.recordInjection(authID, model, entry)
+	rt.recordInjection(req, entry)
 	headers := make(http.Header)
 	headers.Set(turnStateHeader, entry.State)
 	return pluginapi.RequestInterceptResponse{Headers: headers}
