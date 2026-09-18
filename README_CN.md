@@ -118,6 +118,8 @@ us.rrp.bestgo.work:10000:USER-zone-custom-region-US:password
 
 选择协议为 `socks5` 后保存，无需改成 JSON 数组。保存内容会写入本机插件数据目录，CPA 重启后自动加载。
 
+缓存 state、探测日志和注入记录也会持久化到插件数据目录的 `runtime.json`，更新或重载插件后仍会恢复；此前版本升级前丢失的内存记录无法找回。
+
 ## 本地构建与验证
 
 ```bash

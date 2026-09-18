@@ -150,9 +150,35 @@ func (r *pluginRuntime) applyConfig(cfg pluginConfig) error {
 			r.probeLogs[i].State = ""
 		}
 	}
+	restorePersistedRuntimeLocked(r, cfg)
 	r.globalErr = ""
 	r.startProbeLocked()
 	return nil
+}
+
+func restorePersistedRuntimeLocked(r *pluginRuntime, cfg pluginConfig) {
+	if len(r.probeLogs) > 0 || len(r.cache.snapshot()) > 0 {
+		return
+	}
+	file := loadPersistedRuntimeFile()
+	if len(file.Entries) > 0 {
+		for _, entry := range file.Entries {
+			if entry.Source == "manual" {
+				_, _ = r.cache.putManual(entry.AuthID, entry.Model, entry.State)
+			} else {
+				_, _, _ = r.cache.storeTarget(entry.AuthID, entry.Model, entry.State, entry.Source, true)
+			}
+		}
+	}
+	limit := cfg.probeLogLimit()
+	if len(file.Logs) > limit {
+		file.Logs = file.Logs[len(file.Logs)-limit:]
+	}
+	if len(file.Injections) > limit {
+		file.Injections = file.Injections[len(file.Injections)-limit:]
+	}
+	r.probeLogs = append(r.probeLogs, file.Logs...)
+	r.injections = append(r.injections, file.Injections...)
 }
 
 func (r *pluginRuntime) applyProbeAuthIDs(authIDs []string) error {
@@ -220,6 +246,7 @@ func (r *pluginRuntime) applyManualState(authID, model, state string) error {
 	}
 	r.mu.Lock()
 	r.windows[makeCacheKey(authID, model)] = windowStats{WindowStartedAt: entry.StoredAt}
+	r.persistLocked()
 	r.mu.Unlock()
 	r.recordObservation(authID, model, state, true, "manual", "")
 	return nil
@@ -297,6 +324,7 @@ func (r *pluginRuntime) recordObservation(authID, model, state string, accepted 
 		record.LastSource = source
 	}
 	r.statuses[key] = record
+	r.persistLocked()
 }
 
 func (r *pluginRuntime) recordInjection(authID, model string, entry cacheEntry) {
@@ -316,6 +344,7 @@ func (r *pluginRuntime) recordInjection(authID, model string, entry cacheEntry) 
 	if len(r.injections) > limit {
 		r.injections = append([]injectionLogEntry(nil), r.injections[len(r.injections)-limit:]...)
 	}
+	r.persistLocked()
 }
 
 func (r *pluginRuntime) recordProbeAttempt(target probeTarget, route string, attempt int, state string, targetMatch, cached bool, errText string) {
@@ -349,6 +378,7 @@ func (r *pluginRuntime) recordProbeAttemptWithProxy(target probeTarget, route, p
 	if len(r.probeLogs) > limit {
 		r.probeLogs = append([]probeLogEntry(nil), r.probeLogs[len(r.probeLogs)-limit:]...)
 	}
+	r.persistLocked()
 }
 
 func (r *pluginRuntime) handleUsage(record pluginapi.UsageRecord) {
