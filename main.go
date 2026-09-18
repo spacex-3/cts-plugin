@@ -219,7 +219,7 @@ func pluginRegistration() registration {
 				{Name: "auth_ids", Type: pluginapi.ConfigFieldTypeArray, Description: "需要探测、采集和注入的 Codex 运行时 auth ID。留空表示选择全部 Codex 账号。"},
 				{Name: "probe_auth_ids", Type: pluginapi.ConfigFieldTypeArray, Description: "仅参与探测的 Codex auth ID。留空表示所有在 auth_ids 范围内的账号都探测；也可直接在状态页勾选保存。"},
 				{Name: "models", Type: pluginapi.ConfigFieldTypeArray, Description: "需要探测和注入的模型。默认 gpt-5.6-sol 和 gpt-6-astra。"},
-				{Name: "interval_seconds", Type: pluginapi.ConfigFieldTypeInteger, Description: "自动探测间隔（秒）。默认 300。"},
+				{Name: "interval_seconds", Type: pluginapi.ConfigFieldTypeInteger, Description: "自动探测间隔（秒）。默认 1800，即 30 分钟。"},
 				{Name: "target_state_length", Type: pluginapi.ConfigFieldTypeInteger, Description: "接受的 x-codex-turn-state 长度。默认 292。"},
 				{Name: "ttl_seconds", Type: pluginapi.ConfigFieldTypeInteger, Description: "已缓存 state 的有效期（秒）。默认 3600，即约 1 小时。"},
 				{Name: "inject", Type: pluginapi.ConfigFieldTypeBoolean, Description: "把缓存的 turn state 注入后续 Codex 生产请求，用于保持不降智。默认开启。"},

@@ -106,10 +106,7 @@ func (rt *pluginRuntime) probeAll(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		if cfg.directProbeEnabled() {
-			rt.probeDirectBaseline(ctx, target, cfg)
-		}
-		rt.probeTargetWithProxies(ctx, proxies, target)
+		rt.probeTargetOnce(ctx, target, cfg, proxies)
 	}
 }
 
@@ -124,10 +121,7 @@ func (rt *pluginRuntime) probeKey(ctx context.Context, key cacheKey) {
 			if makeCacheKey(target.AuthID, target.Model) != key {
 				continue
 			}
-			if cfg.directProbeEnabled() {
-				rt.probeDirectBaseline(ctx, target, cfg)
-			}
-			rt.probeTargetWithProxies(ctx, proxies, target)
+			rt.probeTargetOnce(ctx, target, cfg, proxies)
 			break
 		}
 	}
@@ -186,6 +180,26 @@ func (rt *pluginRuntime) probeDirectBaseline(ctx context.Context, target probeTa
 	if targetMatch {
 		rt.observeState(target.AuthID, target.Model, state, "direct")
 	}
+}
+
+func (rt *pluginRuntime) probeTargetOnce(ctx context.Context, target probeTarget, cfg pluginConfig, proxies []string) {
+	if cfg.directProbeEnabled() {
+		if state, errProbe := rt.probeOnce(ctx, "", target, cfg); errProbe == nil {
+			targetMatch := len(strings.TrimSpace(state)) == cfg.targetLength()
+			errText := ""
+			if !targetMatch {
+				errText = fmt.Sprintf("turn state length %d does not match target %d", len(strings.TrimSpace(state)), cfg.targetLength())
+			}
+			rt.recordProbeAttempt(target, "direct", 0, state, targetMatch, false, errText)
+			if targetMatch {
+				rt.observeState(target.AuthID, target.Model, state, "direct")
+				return
+			}
+		} else {
+			rt.recordProbeAttempt(target, "direct", 0, "", false, false, errProbe.Error())
+		}
+	}
+	rt.probeTargetWithProxies(ctx, proxies, target)
 }
 
 func (rt *pluginRuntime) probeTarget(ctx context.Context, proxyURL string, target probeTarget) {

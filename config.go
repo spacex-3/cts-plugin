@@ -10,7 +10,7 @@ const (
 	resourcePath        = "/status"
 	resourceContentType = "text/html; charset=utf-8"
 
-	defaultIntervalSeconds         = 300
+	defaultIntervalSeconds         = 1800
 	defaultTargetStateLength       = 292
 	defaultTTLSeconds              = 3600
 	defaultMaxProbeAttempts        = 3
@@ -28,7 +28,7 @@ const (
 )
 
 var (
-	pluginVersion      = "0.3.6"
+	pluginVersion      = "0.3.7"
 	defaultProbeModels = []string{"gpt-5.6-sol", "gpt-6-astra"}
 )
 

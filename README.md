@@ -69,7 +69,7 @@ plugins:
 - `auth_ids`: exact Codex runtime auth IDs. Empty permits every Codex auth visible to the host.
 - `probe_auth_ids`: auth IDs that may be probed. Empty probes every auth in the `auth_ids` scope; the status page also supports per-account selection.
 - `models`: exact upstream model IDs. Defaults to `gpt-5.6-sol` and `gpt-6-astra`.
-- `interval_seconds`: delay after one full probe cycle finishes. Default: `300`.
+- `interval_seconds`: delay after one full probe cycle finishes. Default: `1800`.
 - `target_state_length`: required state length. Default: `292`.
 - `ttl_seconds`: maximum cache age for injection. Default: `3600`.
 - `inject`: inject fresh cached state into matching requests. Default: `true`.

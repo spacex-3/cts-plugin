@@ -299,3 +299,55 @@ func TestProbeLogHidesStateAndHonorsLimit(t *testing.T) {
 		}
 	}
 }
+
+func TestProbeTargetOnceStopsAfterDirectMatch(t *testing.T) {
+	probe := false
+	transport := &sequenceProbeTransport{states: []string{"abc"}}
+	testRuntime := newRuntime()
+	testRuntime.config = normalizeConfig(pluginConfig{
+		TargetStateLength: 3,
+		DirectProbe:       boolPtr(true),
+		Probe:             &probe,
+	})
+	testRuntime.cache = newStateCache(time.Hour, 3, time.Now)
+	testRuntime.host = noopHost{}
+	testRuntime.transport = transport
+	target := probeTarget{AuthID: "auth-1", Model: "model-1", BaseURL: "https://example.test/backend-api/codex"}
+
+	testRuntime.probeTargetOnce(context.Background(), target, testRuntime.configSnapshot(), []string{"http://proxy.example:8080"})
+
+	if transport.calls != 1 {
+		t.Fatalf("probe calls = %d, want only direct probe", transport.calls)
+	}
+	if transport.proxies[0] != "" {
+		t.Fatalf("first probe should be direct, got %q", transport.proxies[0])
+	}
+	if _, ok := testRuntime.cache.lookup("auth-1", "model-1"); !ok {
+		t.Fatal("direct 292 state should be cached")
+	}
+}
+
+func TestProbeTargetOnceFallsBackToProxiesAfterDirectMismatch(t *testing.T) {
+	probe := false
+	transport := &sequenceProbeTransport{states: []string{"xx", "abc"}}
+	testRuntime := newRuntime()
+	testRuntime.config = normalizeConfig(pluginConfig{
+		TargetStateLength: 3,
+		DirectProbe:       boolPtr(true),
+		MaxProbeAttempts:  2,
+		Probe:             &probe,
+	})
+	testRuntime.cache = newStateCache(time.Hour, 3, time.Now)
+	testRuntime.host = noopHost{}
+	testRuntime.transport = transport
+	target := probeTarget{AuthID: "auth-1", Model: "model-1", BaseURL: "https://example.test/backend-api/codex"}
+
+	testRuntime.probeTargetOnce(context.Background(), target, testRuntime.configSnapshot(), []string{"http://proxy.example:8080"})
+
+	if transport.calls != 2 {
+		t.Fatalf("probe calls = %d, want direct then proxy fallback", transport.calls)
+	}
+	if transport.proxies[0] != "" || transport.proxies[1] == "" {
+		t.Fatalf("probe order = %#v, want direct then proxy", transport.proxies)
+	}
+}
