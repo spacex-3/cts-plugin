@@ -91,4 +91,7 @@ func TestRenderStatusPageProbeButtonDoesNotNavigate(t *testing.T) {
 	if strings.Contains(page, `<form method="post"`) {
 		t.Fatal("probe button should not submit a form")
 	}
+	if !strings.Contains(page, `id="refresh-now"`) {
+		t.Fatal("status page should include an in-page refresh button")
+	}
 }
