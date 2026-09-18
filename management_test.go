@@ -22,12 +22,63 @@ func TestRenderStatusPageShowsProbeStatesOnlyWhenEnabled(t *testing.T) {
 	if strings.Contains(hidden, "secret-state") {
 		t.Fatal("hidden status page exposed a state value")
 	}
-	if !strings.Contains(hidden, "show_state_values: true") {
-		t.Fatal("hidden status page should explain how to enable values")
+	if !strings.Contains(hidden, "show_state_values") {
+		t.Fatal("hidden status page should mention show_state_values")
 	}
 	base.ShowStateValues = true
 	shown := string(renderStatusPage(base, false))
 	if !strings.Contains(shown, "secret-state") {
 		t.Fatal("enabled status page did not display the state value")
+	}
+}
+
+func TestRenderStatusPageUsesMatchAndMismatchColors(t *testing.T) {
+	page := string(renderStatusPage(statusView{
+		TargetStateLength: 292,
+		Models:            []string{"model-1"},
+		Accounts: []statusAccount{{
+			AuthID: "auth-1",
+			Label:  "account-one",
+			Models: []statusAccountModel{{
+				Model:               "model-1",
+				HasState:            true,
+				Length:              292,
+				RemainingTTLSeconds: 1800,
+				Requests:            3,
+				Successes:           2,
+				AvgTTFTSeconds:      1.2,
+			}},
+		}},
+		ProbeLogs: []statusProbeLog{{
+			AuthID:      "auth-1",
+			Model:       "model-1",
+			Length:      292,
+			TargetMatch: true,
+		}, {
+			AuthID:      "auth-1",
+			Model:       "model-1",
+			Length:      312,
+			TargetMatch: false,
+		}},
+	}, false))
+	if !strings.Contains(page, "class=\"match\"") {
+		t.Fatal("status page should mark matching logs green")
+	}
+	if !strings.Contains(page, "class=\"mismatch\"") {
+		t.Fatal("status page should mark nonmatching logs red")
+	}
+	if !strings.Contains(page, "平均首字") || !strings.Contains(page, "倒计时") {
+		t.Fatal("status page should show window metrics and countdown")
+	}
+}
+
+func TestAccountColorIsStableAndDistinct(t *testing.T) {
+	first := accountColor("auth-1")
+	second := accountColor("auth-2")
+	if first != accountColor("auth-1") {
+		t.Fatal("account color should be stable")
+	}
+	if first == second {
+		t.Fatal("different accounts should get different colors")
 	}
 }

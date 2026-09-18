@@ -9,6 +9,25 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/proxyutil"
 )
 
+func parseProxyURLs(raw string) ([]string, error) {
+	raw = strings.ReplaceAll(raw, "\r\n", "\n")
+	lines := strings.Split(raw, "\n")
+	proxies := make([]string, 0, len(lines))
+	for lineNumber, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		proxyURL, errParse := parseProxyURL(line)
+		if errParse != nil {
+			return nil, fmt.Errorf("proxy line %d: %w", lineNumber+1, errParse)
+		}
+		if proxyURL != "" {
+			proxies = append(proxies, proxyURL)
+		}
+	}
+	return proxies, nil
+}
+
 func parseProxyURL(raw string) (string, error) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
@@ -96,4 +115,12 @@ func splitHostPortUserPassword(raw string) (host, port, user, password string, e
 		return "", "", "", "", fmt.Errorf("proxy must be host:port:user:password")
 	}
 	return host, port, user, password, nil
+}
+
+func redactProxyURL(proxyURL string) string {
+	setting, errParse := proxyutil.Parse(strings.TrimSpace(proxyURL))
+	if errParse != nil || setting.URL == nil {
+		return "(invalid)"
+	}
+	return proxyutil.Redact(setting.URL.String())
 }

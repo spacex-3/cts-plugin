@@ -77,30 +77,42 @@ func (c *stateCache) nowLocked() time.Time {
 }
 
 func (c *stateCache) putIfTarget(authID, model, state, source string) bool {
+	_, accepted, _ := c.storeTarget(authID, model, state, source, true)
+	return accepted
+}
+
+func (c *stateCache) storeTarget(authID, model, state, source string, refresh bool) (cacheEntry, bool, bool) {
 	if c == nil {
-		return false
+		return cacheEntry{}, false, false
 	}
 	authID = strings.TrimSpace(authID)
 	model = strings.TrimSpace(model)
 	state = strings.TrimSpace(state)
-	if authID == "" || model == "" || state == "" {
-		return false
+	if authID == "" || model == "" || state == "" || len(state) != c.targetLength {
+		return cacheEntry{}, false, false
 	}
 	key := cacheKey{AuthID: authID, Model: model}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if len(state) != c.targetLength {
-		return false
+	now := c.nowLocked()
+	current, exists := c.entries[key]
+	if exists && c.expiredLocked(current, now) {
+		delete(c.entries, key)
+		exists = false
 	}
-	c.entries[key] = cacheEntry{
+	if exists && current.State == state && !refresh {
+		return current, true, false
+	}
+	entry := cacheEntry{
 		AuthID:   authID,
 		Model:    model,
 		State:    state,
 		Length:   len(state),
-		StoredAt: c.nowLocked(),
+		StoredAt: now,
 		Source:   source,
 	}
-	return true
+	c.entries[key] = entry
+	return entry, true, !exists || current.State != state || refresh
 }
 
 func (c *stateCache) lookup(authID, model string) (cacheEntry, bool) {

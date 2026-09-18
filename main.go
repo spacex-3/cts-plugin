@@ -94,6 +94,7 @@ type registrationCapabilities struct {
 	StreamChunkInterceptor    bool `json:"response_stream_interceptor"`
 	WebSocketResponseObserver bool `json:"websocket_response_observer"`
 	ManagementAPI             bool `json:"management_api"`
+	UsagePlugin               bool `json:"usage_plugin"`
 }
 
 type liveHost struct{}
@@ -166,12 +167,14 @@ func handleMethod(method string, request []byte) ([]byte, error) {
 		return interceptStreamChunk(request)
 	case pluginabi.MethodWebSocketResponseEvent:
 		return observeWebSocket(request)
+	case pluginabi.MethodUsageHandle:
+		return handleUsage(request)
 	case pluginabi.MethodManagementRegister:
 		return okEnvelope(managementRegistration{
 			Resources: []managementResource{{
 				Path:        resourcePath,
 				Menu:        "Codex Turn State",
-				Description: "Probes Codex accounts for x-codex-turn-state and injects target-length tickets into later requests.",
+				Description: "探测 Codex 账号的 x-codex-turn-state，并把命中目标长度的 ticket 注入后续请求。",
 			}},
 		})
 	case pluginabi.MethodManagementHandle:
@@ -210,21 +213,22 @@ func pluginRegistration() registration {
 			GitHubRepository: "https://github.com/spacex-3/cts-plugin",
 			Logo:             "https://raw.githubusercontent.com/router-for-me/CLIProxyAPI/main/docs/logo.png",
 			ConfigFields: []pluginapi.ConfigField{
-				{Name: "proxy", Type: pluginapi.ConfigFieldTypeString, Description: "Rotating residential proxy as host:port:user:password or an http/https/socks5 URL."},
-				{Name: "auth_ids", Type: pluginapi.ConfigFieldTypeArray, Description: "Exact Codex runtime auth IDs to probe, harvest, and inject. Empty selects every Codex auth."},
-				{Name: "models", Type: pluginapi.ConfigFieldTypeArray, Description: "Models to probe and inject. Defaults to gpt-5.6-sol and gpt-6-astra."},
-				{Name: "interval_seconds", Type: pluginapi.ConfigFieldTypeInteger, Description: "Probe interval in seconds. Default 300."},
-				{Name: "target_state_length", Type: pluginapi.ConfigFieldTypeInteger, Description: "Accepted x-codex-turn-state length. Default 292."},
-				{Name: "ttl_seconds", Type: pluginapi.ConfigFieldTypeInteger, Description: "Cached state lifetime in seconds. Default 3600."},
-				{Name: "inject", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Inject cached turn state into Codex production requests."},
-				{Name: "harvest", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Capture qualifying turn state from live CPA Codex traffic."},
-				{Name: "probe", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Run the rotating-proxy probe loop."},
-				{Name: "direct_probe", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Record one no-proxy baseline before proxy attempts. Default false."},
-				{Name: "show_state_values", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Display future full state values in the status page and JSON. Default false."},
-				{Name: "probe_log_limit", Type: pluginapi.ConfigFieldTypeInteger, Description: "Maximum in-memory probe log entries. Default 200, maximum 1000."},
-				{Name: "max_probe_attempts", Type: pluginapi.ConfigFieldTypeInteger, Description: "Probe attempts per account+model in one cycle. Default 3."},
-				{Name: "max_output_tokens", Type: pluginapi.ConfigFieldTypeInteger, Description: "Deprecated and ignored; Codex upstream rejects token limit fields."},
-				{Name: "prompt", Type: pluginapi.ConfigFieldTypeString, Description: "Minimal prompt sent by each probe. Default is a single period."},
+				{Name: "proxy", Type: pluginapi.ConfigFieldTypeString, Description: "旋转住宅代理，每行一个，格式为 host:port:user:password 或 http/https/socks5 URL。未命中时自动轮询下一条。"},
+				{Name: "auth_ids", Type: pluginapi.ConfigFieldTypeArray, Description: "需要探测、采集和注入的 Codex 运行时 auth ID。留空表示选择全部 Codex 账号。"},
+				{Name: "models", Type: pluginapi.ConfigFieldTypeArray, Description: "需要探测和注入的模型。默认 gpt-5.6-sol 和 gpt-6-astra。"},
+				{Name: "interval_seconds", Type: pluginapi.ConfigFieldTypeInteger, Description: "自动探测间隔（秒）。默认 300。"},
+				{Name: "target_state_length", Type: pluginapi.ConfigFieldTypeInteger, Description: "接受的 x-codex-turn-state 长度。默认 292。"},
+				{Name: "ttl_seconds", Type: pluginapi.ConfigFieldTypeInteger, Description: "已缓存 state 的有效期（秒）。默认 3600，即约 1 小时。"},
+				{Name: "inject", Type: pluginapi.ConfigFieldTypeBoolean, Description: "把缓存的 turn state 注入后续 Codex 生产请求，用于保持不降智。默认开启。"},
+				{Name: "harvest", Type: pluginapi.ConfigFieldTypeBoolean, Description: "从正常 CPA Codex 流量中采集命中目标长度的 state。默认开启。"},
+				{Name: "probe", Type: pluginapi.ConfigFieldTypeBoolean, Description: "运行代理探测循环，主动获取 state。默认开启。"},
+				{Name: "direct_probe", Type: pluginapi.ConfigFieldTypeBoolean, Description: "每次代理探测前先记录一次无代理基线，用于对照，不会缓存。默认关闭。"},
+				{Name: "show_state_values", Type: pluginapi.ConfigFieldTypeBoolean, Description: "在状态页和 JSON 中显示完整 state 值。涉及敏感信息，仅在可信环境开启。默认关闭。"},
+				{Name: "probe_log_limit", Type: pluginapi.ConfigFieldTypeInteger, Description: "内存中保留的探测日志条数。默认 200，最大 1000。"},
+				{Name: "max_probe_attempts", Type: pluginapi.ConfigFieldTypeInteger, Description: "每个账号+模型在一轮探测中的尝试次数。默认 3。"},
+				{Name: "failure_reprobe_threshold", Type: pluginapi.ConfigFieldTypeInteger, Description: "倒计时窗口内连续失败多少次后自动重新探测。默认 3；设为负数可关闭。"},
+				{Name: "max_output_tokens", Type: pluginapi.ConfigFieldTypeInteger, Description: "已废弃并忽略；Codex 上游拒绝 token limit 字段。"},
+				{Name: "prompt", Type: pluginapi.ConfigFieldTypeString, Description: "每次探测发送的最小提示词。默认是一个句号。"},
 			},
 		},
 		Capabilities: registrationCapabilities{
@@ -233,6 +237,7 @@ func pluginRegistration() registration {
 			StreamChunkInterceptor:    true,
 			WebSocketResponseObserver: true,
 			ManagementAPI:             true,
+			UsagePlugin:               true,
 		},
 	}
 }

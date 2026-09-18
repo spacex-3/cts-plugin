@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"strings"
 	"time"
 )
@@ -11,14 +10,15 @@ const (
 	resourcePath        = "/status"
 	resourceContentType = "text/html; charset=utf-8"
 
-	defaultIntervalSeconds   = 300
-	defaultTargetStateLength = 292
-	defaultTTLSeconds        = 3600
-	defaultMaxProbeAttempts  = 3
-	defaultMaxOutputTokens   = 16
-	defaultProbeLogLimit     = 200
-	maxProbeLogLimit         = 1000
-	defaultProbePrompt       = "."
+	defaultIntervalSeconds         = 300
+	defaultTargetStateLength       = 292
+	defaultTTLSeconds              = 3600
+	defaultMaxProbeAttempts        = 3
+	defaultMaxOutputTokens         = 16
+	defaultProbeLogLimit           = 200
+	maxProbeLogLimit               = 1000
+	defaultFailureReprobeThreshold = 3
+	defaultProbePrompt             = "."
 
 	codexUserAgent  = "codex-tui/0.154.0 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.154.0)"
 	codexOriginator = "codex-tui"
@@ -28,26 +28,27 @@ const (
 )
 
 var (
-	pluginVersion      = "0.2.1"
+	pluginVersion      = "0.3.0"
 	defaultProbeModels = []string{"gpt-5.6-sol", "gpt-6-astra"}
 )
 
 type pluginConfig struct {
-	Proxy             string   `yaml:"proxy"`
-	AuthIDs           []string `yaml:"auth_ids"`
-	Models            []string `yaml:"models"`
-	IntervalSeconds   int      `yaml:"interval_seconds"`
-	TargetStateLength int      `yaml:"target_state_length"`
-	TTLSeconds        int      `yaml:"ttl_seconds"`
-	Inject            *bool    `yaml:"inject"`
-	Harvest           *bool    `yaml:"harvest"`
-	Probe             *bool    `yaml:"probe"`
-	DirectProbe       *bool    `yaml:"direct_probe"`
-	ShowStateValues   *bool    `yaml:"show_state_values"`
-	ProbeLogLimit     int      `yaml:"probe_log_limit"`
-	MaxProbeAttempts  int      `yaml:"max_probe_attempts"`
-	MaxOutputTokens   int      `yaml:"max_output_tokens"`
-	Prompt            string   `yaml:"prompt"`
+	Proxy                   string   `yaml:"proxy"`
+	AuthIDs                 []string `yaml:"auth_ids"`
+	Models                  []string `yaml:"models"`
+	IntervalSeconds         int      `yaml:"interval_seconds"`
+	TargetStateLength       int      `yaml:"target_state_length"`
+	TTLSeconds              int      `yaml:"ttl_seconds"`
+	Inject                  *bool    `yaml:"inject"`
+	Harvest                 *bool    `yaml:"harvest"`
+	Probe                   *bool    `yaml:"probe"`
+	DirectProbe             *bool    `yaml:"direct_probe"`
+	ShowStateValues         *bool    `yaml:"show_state_values"`
+	ProbeLogLimit           int      `yaml:"probe_log_limit"`
+	MaxProbeAttempts        int      `yaml:"max_probe_attempts"`
+	FailureReprobeThreshold int      `yaml:"failure_reprobe_threshold"`
+	MaxOutputTokens         int      `yaml:"max_output_tokens"`
+	Prompt                  string   `yaml:"prompt"`
 }
 
 func (c pluginConfig) injectEnabled() bool {
@@ -106,6 +107,16 @@ func (c pluginConfig) maxAttempts() int {
 		return defaultMaxProbeAttempts
 	}
 	return c.MaxProbeAttempts
+}
+
+func (c pluginConfig) failureReprobeThreshold() int {
+	if c.FailureReprobeThreshold < 0 {
+		return 0
+	}
+	if c.FailureReprobeThreshold == 0 {
+		return defaultFailureReprobeThreshold
+	}
+	return c.FailureReprobeThreshold
 }
 
 func (c pluginConfig) maxOutputTokens() int {
@@ -185,6 +196,9 @@ func normalizeConfig(cfg pluginConfig) pluginConfig {
 	if cfg.MaxProbeAttempts < 0 {
 		cfg.MaxProbeAttempts = 0
 	}
+	if cfg.FailureReprobeThreshold < 0 {
+		cfg.FailureReprobeThreshold = -1
+	}
 	if cfg.MaxOutputTokens < 0 {
 		cfg.MaxOutputTokens = 0
 	}
@@ -226,12 +240,6 @@ func formatDuration(d time.Duration) string {
 }
 
 func validateProxyConfig(raw string) error {
-	if strings.TrimSpace(raw) == "" {
-		return nil
-	}
-	_, errParse := parseProxyURL(raw)
-	if errParse != nil {
-		return fmt.Errorf("proxy: %w", errParse)
-	}
-	return nil
+	_, errParse := parseProxyURLs(raw)
+	return errParse
 }

@@ -56,12 +56,13 @@ plugins:
       show_state_values: true
       probe_log_limit: 200
       max_probe_attempts: 3
+      failure_reprobe_threshold: 3
       prompt: "."
 ```
 
 ### Fields
 
-- `proxy`: rotating proxy endpoint. Supports `host:port:user:password`, provider-style `socks5://host:port:user:password`, and standard `socks5://user:password@host:port` / HTTP(S) URLs. Credentials are URL-encoded internally; bracket IPv6 literals.
+- `proxy`: one or more rotating proxy endpoints, one per line. Supports `host:port:user:password`, provider-style `socks5://host:port:user:password`, and standard `socks5://user:password@host:port` / HTTP(S) URLs. Credentials are URL-encoded internally; bracket IPv6 literals. A nonmatching state advances to the next proxy on the following attempt.
 - `auth_ids`: exact Codex runtime auth IDs. Empty permits every Codex auth visible to the host.
 - `models`: exact upstream model IDs. Defaults to `gpt-5.6-sol` and `gpt-6-astra`.
 - `interval_seconds`: delay after one full probe cycle finishes. Default: `300`.
@@ -74,10 +75,11 @@ plugins:
 - `show_state_values`: display and retain future full state values in the status page/JSON probe log. Default: `false`; enable only on a protected management endpoint.
 - `probe_log_limit`: maximum in-memory attempt records. Default: `200`, maximum: `1000`.
 - `max_probe_attempts`: attempts per auth/model in one cycle. Default: `3`.
+- `failure_reprobe_threshold`: consecutive production request failures inside the current state window that trigger a targeted reprobe. Default: `3`; a negative value disables this behavior.
 - `max_output_tokens`: deprecated compatibility field. It is ignored because Codex upstream rejects token-limit parameters.
 - `prompt`: minimal probe input. Default: `.`.
 
-When `probe` is enabled, `proxy` must be configured. A wrong-length state consumes an attempt and is not cached.
+When `probe` is enabled, `proxy` must contain at least one endpoint. A wrong-length state consumes an attempt and is not cached.
 
 ## Matching behavior
 
@@ -102,7 +104,7 @@ The plugin registers:
 - `GET .../status?format=json`: JSON status.
 - `POST .../status` or `GET .../status?op=probe`: queue an immediate probe cycle.
 
-Proxy credentials and access tokens are never displayed. Full state values are displayed only when `show_state_values: true`; existing records captured while it was disabled remain hidden.
+The page shows account cards at the top with a stable per-account color, current state length, live countdown, and requests/successes/total tokens/average TTFT for the current state window, followed by recent probe results and every proxy attempt. Proxy credentials and access tokens are never displayed. Full state values are displayed only when `show_state_values: true`; existing records captured while it was disabled remain hidden.
 
 ## Build locally
 

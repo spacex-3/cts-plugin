@@ -83,3 +83,23 @@ func TestParseProxyURLSchemeShorthandEscapesProviderCredentials(t *testing.T) {
 		t.Fatalf("proxy credentials were not URL encoded: %q", got)
 	}
 }
+
+func TestParseProxyURLsSplitsLines(t *testing.T) {
+	got, errParse := parseProxyURLs("proxy-one.example:8080:user:pass\r\n\n socks5://user:pass@proxy-two.example:1080 ")
+	if errParse != nil {
+		t.Fatal(errParse)
+	}
+	if len(got) != 2 {
+		t.Fatalf("proxy count = %d, want 2", len(got))
+	}
+	if got[0] != "http://user:pass@proxy-one.example:8080" || got[1] != "socks5://user:pass@proxy-two.example:1080" {
+		t.Fatalf("proxies = %#v", got)
+	}
+}
+
+func TestParseProxyURLsReportsLineNumber(t *testing.T) {
+	_, errParse := parseProxyURLs("proxy-one.example:8080:user:pass\ninvalid")
+	if errParse == nil || !strings.Contains(errParse.Error(), "line 2") {
+		t.Fatalf("error = %v, want line 2", errParse)
+	}
+}

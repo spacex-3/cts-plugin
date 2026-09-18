@@ -53,6 +53,8 @@ func (rt *pluginRuntime) runProbeLoop(ctx context.Context) {
 			return
 		case <-rt.trigger:
 			rt.probeAll(ctx)
+		case key := <-rt.targetTrigger:
+			rt.probeKey(ctx, key)
 		case <-timer.C:
 			rt.probeAll(ctx)
 		}
@@ -76,48 +78,92 @@ func (rt *pluginRuntime) triggerProbe() {
 	}
 }
 
+func (rt *pluginRuntime) triggerTargetProbe(key cacheKey) bool {
+	if rt == nil || key.AuthID == "" || key.Model == "" || !rt.configSnapshot().probeEnabled() {
+		return false
+	}
+	select {
+	case rt.targetTrigger <- key:
+		return true
+	default:
+		return false
+	}
+}
+
 func (rt *pluginRuntime) probeAll(ctx context.Context) {
 	if rt == nil {
 		return
 	}
 	cfg := rt.configSnapshot()
-	if !cfg.probeEnabled() {
+	if !cfg.probeEnabled() || ctx.Err() != nil {
 		return
 	}
-	if errCtx := ctx.Err(); errCtx != nil {
-		return
-	}
-	targets, errTargets := rt.listProbeTargets()
-	if errTargets != nil {
-		rt.host.Log("warn", "codex-turn-state: list probe targets failed", map[string]any{"error": errTargets.Error()})
-		rt.setGlobalProbeError(errTargets.Error())
-		return
-	}
-	if len(targets) == 0 {
-		rt.setGlobalProbeError("no matching Codex credentials")
-		return
-	}
-	rt.setGlobalProbeError("")
-	proxyURL, errProxy := parseProxyURL(cfg.Proxy)
-	if errProxy != nil {
-		rt.host.Log("warn", "codex-turn-state: invalid probe proxy", map[string]any{"error": errProxy.Error()})
-		rt.setGlobalProbeError(errProxy.Error())
-		return
-	}
-	if proxyURL == "" {
-		rt.host.Log("info", "codex-turn-state: probe skipped because proxy is empty", nil)
-		rt.setGlobalProbeError("proxy is required for probing")
+	targets, proxies, ok := rt.prepareProbe(cfg)
+	if !ok {
 		return
 	}
 	for _, target := range targets {
-		if errCtx := ctx.Err(); errCtx != nil {
+		if ctx.Err() != nil {
 			return
 		}
 		if cfg.directProbeEnabled() {
 			rt.probeDirectBaseline(ctx, target, cfg)
 		}
-		rt.probeTarget(ctx, proxyURL, target)
+		rt.probeTargetWithProxies(ctx, proxies, target)
 	}
+}
+
+func (rt *pluginRuntime) probeKey(ctx context.Context, key cacheKey) {
+	cfg := rt.configSnapshot()
+	if !cfg.probeEnabled() || ctx.Err() != nil {
+		return
+	}
+	targets, proxies, ok := rt.prepareProbe(cfg)
+	if ok {
+		for _, target := range targets {
+			if makeCacheKey(target.AuthID, target.Model) != key {
+				continue
+			}
+			if cfg.directProbeEnabled() {
+				rt.probeDirectBaseline(ctx, target, cfg)
+			}
+			rt.probeTargetWithProxies(ctx, proxies, target)
+			break
+		}
+	}
+	rt.mu.Lock()
+	stats := rt.windows[key]
+	if stats.ReprobeQueued {
+		stats.ReprobeQueued = false
+		rt.windows[key] = stats
+	}
+	rt.mu.Unlock()
+}
+
+func (rt *pluginRuntime) prepareProbe(cfg pluginConfig) ([]probeTarget, []string, bool) {
+	targets, errTargets := rt.listProbeTargets()
+	if errTargets != nil {
+		rt.host.Log("warn", "codex-turn-state: list probe targets failed", map[string]any{"error": errTargets.Error()})
+		rt.setGlobalProbeError(errTargets.Error())
+		return nil, nil, false
+	}
+	if len(targets) == 0 {
+		rt.setGlobalProbeError("no matching Codex credentials")
+		return nil, nil, false
+	}
+	proxies, errProxy := parseProxyURLs(cfg.Proxy)
+	if errProxy != nil {
+		rt.host.Log("warn", "codex-turn-state: invalid probe proxy", map[string]any{"error": errProxy.Error()})
+		rt.setGlobalProbeError(errProxy.Error())
+		return nil, nil, false
+	}
+	if len(proxies) == 0 {
+		rt.host.Log("info", "codex-turn-state: probe skipped because proxy is empty", nil)
+		rt.setGlobalProbeError("at least one proxy is required for probing")
+		return nil, nil, false
+	}
+	rt.setGlobalProbeError("")
+	return targets, proxies, true
 }
 
 func (rt *pluginRuntime) probeDirectBaseline(ctx context.Context, target probeTarget, cfg pluginConfig) {
@@ -132,50 +178,57 @@ func (rt *pluginRuntime) probeDirectBaseline(ctx context.Context, target probeTa
 		return
 	}
 	targetMatch := len(strings.TrimSpace(state)) == cfg.targetLength()
-	rt.recordProbeAttempt(target, "direct", 0, state, targetMatch, false, "")
-	rt.host.Log("info", "codex-turn-state: direct baseline observed", map[string]any{
-		"auth_id":      target.AuthID,
-		"model":        target.Model,
-		"length":       len(strings.TrimSpace(state)),
-		"target_match": targetMatch,
-	})
+	errText := ""
+	if !targetMatch {
+		errText = fmt.Sprintf("turn state length %d does not match target %d", len(strings.TrimSpace(state)), cfg.targetLength())
+	}
+	rt.recordProbeAttempt(target, "direct", 0, state, targetMatch, false, errText)
 }
 
 func (rt *pluginRuntime) probeTarget(ctx context.Context, proxyURL string, target probeTarget) {
+	rt.probeTargetWithProxies(ctx, []string{proxyURL}, target)
+}
+
+func (rt *pluginRuntime) probeTargetWithProxies(ctx context.Context, proxies []string, target probeTarget) {
 	cfg := rt.configSnapshot()
 	attempts := cfg.maxAttempts()
 	var lastErr error
 	for attempt := 1; attempt <= attempts; attempt++ {
-		if errCtx := ctx.Err(); errCtx != nil {
+		if ctx.Err() != nil {
 			return
 		}
+		proxyIndex := (attempt - 1) % len(proxies)
+		proxyURL := proxies[proxyIndex]
+		proxyLabel := redactProxyURL(proxyURL)
 		state, errProbe := rt.probeOnce(ctx, proxyURL, target, cfg)
 		if errProbe != nil {
 			lastErr = errProbe
 			rt.recordProbe(target, "", false, errProbe.Error())
-			rt.recordProbeAttempt(target, "proxy", attempt, "", false, false, errProbe.Error())
+			rt.recordProbeAttemptWithProxy(target, "proxy", proxyLabel, attempt, "", false, false, errProbe.Error())
 			continue
 		}
 		accepted := rt.observeState(target.AuthID, target.Model, state, "probe")
 		if accepted {
-			rt.recordProbeAttempt(target, "proxy", attempt, state, true, true, "")
+			rt.recordProbeAttemptWithProxy(target, "proxy", proxyLabel, attempt, state, true, true, "")
 			rt.recordProbe(target, state, true, "")
 			rt.host.Log("info", "codex-turn-state: captured target turn state", map[string]any{
-				"auth_id": target.AuthID,
-				"model":   target.Model,
-				"length":  len(state),
+				"auth_id":     target.AuthID,
+				"model":       target.Model,
+				"length":      len(state),
+				"proxy_index": proxyIndex + 1,
 			})
 			return
 		}
 		lastErr = fmt.Errorf("turn state length %d does not match target %d", len(strings.TrimSpace(state)), cfg.targetLength())
-		rt.recordProbeAttempt(target, "proxy", attempt, state, false, false, lastErr.Error())
+		rt.recordProbeAttemptWithProxy(target, "proxy", proxyLabel, attempt, state, false, false, lastErr.Error())
 		rt.recordProbe(target, state, false, lastErr.Error())
 		rt.host.Log("info", "codex-turn-state: probe turn state rejected", map[string]any{
-			"auth_id": target.AuthID,
-			"model":   target.Model,
-			"length":  len(strings.TrimSpace(state)),
-			"target":  cfg.targetLength(),
-			"attempt": attempt,
+			"auth_id":     target.AuthID,
+			"model":       target.Model,
+			"length":      len(strings.TrimSpace(state)),
+			"target":      cfg.targetLength(),
+			"attempt":     attempt,
+			"proxy_index": proxyIndex + 1,
 		})
 	}
 	if lastErr != nil {

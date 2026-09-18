@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"html"
 	"net/http"
 	"net/url"
@@ -40,33 +41,38 @@ type managementResource struct {
 }
 
 type statusView struct {
-	Proxy             string           `json:"proxy"`
-	AuthIDs           []string         `json:"auth_ids"`
-	Models            []string         `json:"models"`
-	IntervalSeconds   int              `json:"interval_seconds"`
-	TargetStateLength int              `json:"target_state_length"`
-	TTLSeconds        int              `json:"ttl_seconds"`
-	Inject            bool             `json:"inject"`
-	Harvest           bool             `json:"harvest"`
-	Probe             bool             `json:"probe"`
-	DirectProbe       bool             `json:"direct_probe"`
-	ShowStateValues   bool             `json:"show_state_values"`
-	ProbeLogLimit     int              `json:"probe_log_limit"`
-	GlobalError       string           `json:"global_error,omitempty"`
-	States            []statusState    `json:"states"`
-	Probes            []statusProbe    `json:"probes"`
-	ProbeLogs         []statusProbeLog `json:"probe_logs"`
-	Auths             []statusAuth     `json:"auths"`
+	Proxy                   string           `json:"proxy"`
+	Proxies                 []string         `json:"proxies"`
+	AuthIDs                 []string         `json:"auth_ids"`
+	Models                  []string         `json:"models"`
+	IntervalSeconds         int              `json:"interval_seconds"`
+	TargetStateLength       int              `json:"target_state_length"`
+	TTLSeconds              int              `json:"ttl_seconds"`
+	FailureReprobeThreshold int              `json:"failure_reprobe_threshold"`
+	MaxProbeAttempts        int              `json:"max_probe_attempts"`
+	Inject                  bool             `json:"inject"`
+	Harvest                 bool             `json:"harvest"`
+	Probe                   bool             `json:"probe"`
+	DirectProbe             bool             `json:"direct_probe"`
+	ShowStateValues         bool             `json:"show_state_values"`
+	ProbeLogLimit           int              `json:"probe_log_limit"`
+	GlobalError             string           `json:"global_error,omitempty"`
+	Accounts                []statusAccount  `json:"accounts"`
+	States                  []statusState    `json:"states"`
+	Probes                  []statusProbe    `json:"probes"`
+	ProbeLogs               []statusProbeLog `json:"probe_logs"`
+	Auths                   []statusAuth     `json:"auths"`
 }
 
 type statusState struct {
-	AuthID       string `json:"auth_id"`
-	Model        string `json:"model"`
-	Length       int    `json:"length"`
-	AgeSeconds   int    `json:"age_seconds"`
-	RemainingTTL int    `json:"remaining_ttl_seconds"`
-	Source       string `json:"source"`
-	State        string `json:"state,omitempty"`
+	AuthID        string `json:"auth_id"`
+	Model         string `json:"model"`
+	Length        int    `json:"length"`
+	AgeSeconds    int    `json:"age_seconds"`
+	RemainingTTL  int    `json:"remaining_ttl_seconds"`
+	ExpiresAtUnix int64  `json:"expires_at_unix,omitempty"`
+	Source        string `json:"source"`
+	State         string `json:"state,omitempty"`
 }
 
 type statusProbe struct {
@@ -86,6 +92,7 @@ type statusProbeLog struct {
 	Model       string `json:"model"`
 	Route       string `json:"route"`
 	Attempt     int    `json:"attempt"`
+	Proxy       string `json:"proxy,omitempty"`
 	State       string `json:"state,omitempty"`
 	Length      int    `json:"length"`
 	TargetMatch bool   `json:"target_match"`
@@ -101,6 +108,33 @@ type statusAuth struct {
 	Email       string `json:"email,omitempty"`
 	Disabled    bool   `json:"disabled"`
 	Unavailable bool   `json:"unavailable"`
+}
+
+type statusAccount struct {
+	AuthID string               `json:"auth_id"`
+	Label  string               `json:"label"`
+	Color  string               `json:"color"`
+	Models []statusAccountModel `json:"models"`
+}
+
+type statusAccountModel struct {
+	Model               string  `json:"model"`
+	HasState            bool    `json:"has_state"`
+	Length              int     `json:"length"`
+	Source              string  `json:"source,omitempty"`
+	State               string  `json:"state,omitempty"`
+	RemainingTTLSeconds int     `json:"remaining_ttl_seconds"`
+	ExpiresAtUnix       int64   `json:"expires_at_unix,omitempty"`
+	Requests            int64   `json:"requests"`
+	Successes           int64   `json:"successes"`
+	Failures            int64   `json:"failures"`
+	ConsecutiveFailures int     `json:"consecutive_failures"`
+	InputTokens         int64   `json:"input_tokens"`
+	OutputTokens        int64   `json:"output_tokens"`
+	ReasoningTokens     int64   `json:"reasoning_tokens"`
+	TotalTokens         int64   `json:"total_tokens"`
+	AvgTTFTSeconds      float64 `json:"avg_ttft_seconds"`
+	LastRequestAtUnix   int64   `json:"last_request_at_unix,omitempty"`
 }
 
 func handleManagement(raw []byte) ([]byte, error) {
@@ -149,30 +183,37 @@ func buildStatusView() statusView {
 	if target <= 0 {
 		target = defaultTargetStateLength
 	}
+	proxies := redactedProxyList(cfg.Proxy)
 	view := statusView{
-		Proxy:             redactedProxy(cfg.Proxy),
-		AuthIDs:           cfg.authIDs(),
-		Models:            cfg.models(),
-		IntervalSeconds:   interval,
-		TargetStateLength: target,
-		TTLSeconds:        ttlSeconds,
-		Inject:            cfg.injectEnabled(),
-		Harvest:           cfg.harvestEnabled(),
-		Probe:             cfg.probeEnabled(),
-		DirectProbe:       cfg.directProbeEnabled(),
-		ShowStateValues:   cfg.showStateValuesEnabled(),
-		ProbeLogLimit:     cfg.probeLogLimit(),
-		GlobalError:       snap.GlobalErr,
+		Proxy:                   strings.Join(proxies, "\n"),
+		Proxies:                 proxies,
+		AuthIDs:                 cfg.authIDs(),
+		Models:                  cfg.models(),
+		IntervalSeconds:         interval,
+		TargetStateLength:       target,
+		TTLSeconds:              ttlSeconds,
+		FailureReprobeThreshold: cfg.failureReprobeThreshold(),
+		MaxProbeAttempts:        cfg.maxAttempts(),
+		Inject:                  cfg.injectEnabled(),
+		Harvest:                 cfg.harvestEnabled(),
+		Probe:                   cfg.probeEnabled(),
+		DirectProbe:             cfg.directProbeEnabled(),
+		ShowStateValues:         cfg.showStateValuesEnabled(),
+		ProbeLogLimit:           cfg.probeLogLimit(),
+		GlobalError:             snap.GlobalErr,
 	}
+	entryByKey := make(map[cacheKey]cacheEntry, len(snap.Entries))
 	for _, entry := range snap.Entries {
+		entryByKey[makeCacheKey(entry.AuthID, entry.Model)] = entry
 		view.States = append(view.States, statusState{
-			AuthID:       entry.AuthID,
-			Model:        entry.Model,
-			Length:       entry.Length,
-			AgeSeconds:   durationSeconds(snap.Now.Sub(entry.StoredAt)),
-			RemainingTTL: durationSeconds(currentRuntime().cache.remaining(entry)),
-			Source:       entry.Source,
-			State:        visibleState(entry.State, cfg.showStateValuesEnabled()),
+			AuthID:        entry.AuthID,
+			Model:         entry.Model,
+			Length:        entry.Length,
+			AgeSeconds:    durationSeconds(snap.Now.Sub(entry.StoredAt)),
+			RemainingTTL:  durationSeconds(snap.TTL - snap.Now.Sub(entry.StoredAt)),
+			ExpiresAtUnix: entry.StoredAt.Add(snap.TTL).Unix(),
+			Source:        entry.Source,
+			State:         visibleState(entry.State, cfg.showStateValuesEnabled()),
 		})
 	}
 	sort.Slice(view.States, func(i, j int) bool {
@@ -207,6 +248,7 @@ func buildStatusView() statusView {
 			Model:       entry.Model,
 			Route:       entry.Route,
 			Attempt:     entry.Attempt,
+			Proxy:       entry.Proxy,
 			State:       visibleState(entry.State, cfg.showStateValuesEnabled()),
 			Length:      entry.Length,
 			TargetMatch: entry.TargetMatch,
@@ -237,92 +279,181 @@ func buildStatusView() statusView {
 			return view.Auths[i].ID < view.Auths[j].ID
 		})
 	}
+	view.Accounts = buildAccountCards(view.Auths, view.Models, cfg, snap, entryByKey)
 	return view
+}
+
+func buildAccountCards(auths []statusAuth, models []string, cfg pluginConfig, snap runtimeSnapshot, entries map[cacheKey]cacheEntry) []statusAccount {
+	allowed := cfg.authIDs()
+	accounts := make([]statusAccount, 0, len(auths))
+	for _, auth := range auths {
+		if len(allowed) > 0 && !containsFold(allowed, auth.ID) {
+			continue
+		}
+		account := statusAccount{
+			AuthID: auth.ID,
+			Label:  firstNonEmpty(auth.Label, auth.Email, auth.Name, auth.ID),
+			Color:  accountColor(auth.ID),
+		}
+		for _, model := range models {
+			key := makeCacheKey(auth.ID, model)
+			entry, hasState := entries[key]
+			stats := snap.Windows[key]
+			modelCard := statusAccountModel{
+				Model:               model,
+				HasState:            hasState,
+				Requests:            stats.Requests,
+				Successes:           stats.Successes,
+				Failures:            stats.Failures,
+				ConsecutiveFailures: stats.ConsecutiveFailures,
+				InputTokens:         stats.InputTokens,
+				OutputTokens:        stats.OutputTokens,
+				ReasoningTokens:     stats.ReasoningTokens,
+				TotalTokens:         stats.TotalTokens,
+			}
+			if stats.TTFTSamples > 0 {
+				modelCard.AvgTTFTSeconds = stats.TTFTTotal.Seconds() / float64(stats.TTFTSamples)
+			}
+			if hasState {
+				modelCard.Length = entry.Length
+				modelCard.Source = entry.Source
+				modelCard.State = visibleState(entry.State, cfg.showStateValuesEnabled())
+				modelCard.ExpiresAtUnix = entry.StoredAt.Add(snap.TTL).Unix()
+				modelCard.RemainingTTLSeconds = durationSeconds(snap.TTL - snap.Now.Sub(entry.StoredAt))
+			}
+			account.Models = append(account.Models, modelCard)
+		}
+		accounts = append(accounts, account)
+	}
+	sort.Slice(accounts, func(i, j int) bool { return accounts[i].AuthID < accounts[j].AuthID })
+	return accounts
 }
 
 func renderStatusPage(view statusView, triggered bool) []byte {
 	var out bytes.Buffer
-	out.WriteString("<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Codex Turn State</title>")
-	out.WriteString("<style>body{font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;margin:2rem;line-height:1.45;color:#1f2933}table{border-collapse:collapse;width:100%;margin:1rem 0}th,td{border:1px solid #d1d5db;padding:.45rem .6rem;text-align:left;vertical-align:top;word-break:break-word}th{background:#f3f4f6}code{background:#f3f4f6;padding:.1rem .3rem;border-radius:6px}.error{color:#b42318}.ok{color:#067647}form{margin:1rem 0 0}</style>")
-	out.WriteString("</head><body><main>")
-	out.WriteString("<h1>Codex Turn State</h1>")
+	out.WriteString("<!DOCTYPE html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Codex Turn State</title>")
+	out.WriteString("<style>")
+	out.WriteString(":root{--bg:#f6f7f9;--panel:#fff;--text:#1f2933;--muted:#68707d;--line:#e2e5ea;--green:#0a8f4d;--green-bg:#e7f6ef;--red:#c13a3a;--red-bg:#fdecec;--amber:#b7791f;--amber-bg:#fff4db;--blue:#2563eb;--blue-bg:#e9f0ff}")
+	out.WriteString("*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:12.5px/1.5 -apple-system,BlinkMacSystemFont,\"Segoe UI\",\"PingFang SC\",\"Microsoft YaHei\",sans-serif}")
+	out.WriteString("header{background:var(--panel);border-bottom:1px solid var(--line);padding:14px 20px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}")
+	out.WriteString("h1{font-size:17px;margin:0;display:flex;align-items:center;gap:8px}.dot{width:10px;height:10px;border-radius:50%;background:var(--green);display:inline-block}")
+	out.WriteString("main{max-width:1280px;margin:0 auto;padding:16px 20px 36px}.section{margin:14px 0}.section-title{font-size:13px;font-weight:700;margin:0 0 8px;color:#323a46}")
+	out.WriteString("button{background:var(--blue);color:#fff;border:0;border-radius:6px;padding:6px 12px;font-size:12.5px;cursor:pointer}button:hover{background:#1d4fd7}")
+	out.WriteString("table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line)}th,td{border-bottom:1px solid var(--line);padding:6px 8px;text-align:left;vertical-align:top;word-break:break-word}th{background:#f0f2f5;font-weight:700;font-size:12px;position:sticky;top:0}")
+	out.WriteString("code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px}.pill{display:inline-flex;align-items:center;gap:4px;padding:1px 7px;border-radius:999px;font-size:11px;font-weight:700}")
+	out.WriteString(".ok{color:var(--green);background:var(--green-bg)}.bad{color:var(--red);background:var(--red-bg)}.warn{color:var(--amber);background:var(--amber-bg)}.info{color:var(--blue);background:var(--blue-bg)}.muted{color:var(--muted)}")
+	out.WriteString(".banner{border-left:4px solid var(--red);background:var(--red-bg);color:var(--red);padding:8px 12px;border-radius:4px;margin:12px 0}")
+	out.WriteString(".chips{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0}.chip{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:11.5px}")
+	out.WriteString(".grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:12px}")
+	out.WriteString(".account{background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--accent,#94a3b8);border-radius:8px;overflow:hidden;min-width:0}")
+	out.WriteString(".account-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:9px 12px;border-bottom:1px solid var(--line)}")
+	out.WriteString(".account-name{font-weight:700;font-size:12.5px;overflow:hidden;text-overflow:ellipsis}.swatch{width:12px;height:12px;border-radius:4px;background:var(--accent,#94a3b8);flex:0 0 auto}")
+	out.WriteString(".model-block{padding:9px 12px;border-bottom:1px solid var(--line)}.model-block:last-child{border-bottom:0}")
+	out.WriteString(".model-row{display:flex;align-items:center;justify-content:space-between;gap:8px}.model-name{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;font-weight:700}")
+	out.WriteString(".countdown{margin:5px 0 7px}.bar{height:5px;border-radius:999px;background:#eef0f3;overflow:hidden}.bar>i{display:block;height:100%;background:var(--green);transition:width 1s linear}")
+	out.WriteString(".metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:5px}.metric{background:#f8fafc;border:1px solid #edf0f3;border-radius:5px;padding:5px 7px}.metric-label{display:block;color:var(--muted);font-size:10.5px}.metric b{font-size:12.5px;font-weight:700}")
+	out.WriteString("details.state{margin-top:7px}summary{cursor:pointer;color:var(--blue);font-size:11.5px}details.state code{display:block;max-height:150px;overflow:auto;white-space:pre-wrap;margin-top:5px}")
+	out.WriteString("tr.match{background:var(--green-bg)}tr.mismatch{background:var(--red-bg)}.match-cell{color:var(--green);font-weight:700}.mismatch-cell{color:var(--red);font-weight:700}")
+	out.WriteString("@media(max-width:640px){.grid{grid-template-columns:1fr}main,header{padding-left:10px;padding-right:10px}}")
+	out.WriteString("</style></head><body>")
+
+	out.WriteString("<header><h1><span class=\"dot\"></span>Codex Turn State</h1>")
+	out.WriteString("<form method=\"post\"><button type=\"submit\">立即探测</button></form></header>")
+	out.WriteString("<main>")
 	if triggered {
-		out.WriteString("<p class=\"ok\">Probe cycle triggered.</p>")
+		out.WriteString("<div class=\"banner\" style=\"border-left-color:var(--green);background:var(--green-bg);color:var(--green)\">已触发一轮探测。</div>")
 	}
 	if view.GlobalError != "" {
-		out.WriteString("<p class=\"error\">")
+		out.WriteString("<div class=\"banner\">")
 		out.WriteString(html.EscapeString(view.GlobalError))
-		out.WriteString("</p>")
+		out.WriteString("</div>")
 	}
-	out.WriteString("<h2>Config</h2><table><tbody>")
-	writeRow(&out, "proxy", view.Proxy)
-	writeRow(&out, "auth_ids", joinOrAll(view.AuthIDs))
-	writeRow(&out, "models", strings.Join(view.Models, ", "))
-	writeRow(&out, "interval_seconds", fmt.Sprintf("%d", view.IntervalSeconds))
-	writeRow(&out, "target_state_length", fmt.Sprintf("%d", view.TargetStateLength))
-	writeRow(&out, "ttl_seconds", fmt.Sprintf("%d", view.TTLSeconds))
-	writeRow(&out, "inject", fmt.Sprintf("%t", view.Inject))
-	writeRow(&out, "harvest", fmt.Sprintf("%t", view.Harvest))
-	writeRow(&out, "probe", fmt.Sprintf("%t", view.Probe))
-	writeRow(&out, "direct_probe", fmt.Sprintf("%t", view.DirectProbe))
-	writeRow(&out, "show_state_values", fmt.Sprintf("%t", view.ShowStateValues))
-	writeRow(&out, "probe_log_limit", fmt.Sprintf("%d", view.ProbeLogLimit))
-	out.WriteString("</tbody></table>")
-	out.WriteString("<form method=\"post\"><button type=\"submit\">Probe now</button></form>")
 
-	out.WriteString("<h2>Cached States</h2>")
-	if len(view.States) == 0 {
-		out.WriteString("<p>No target-length states cached.</p>")
+	out.WriteString("<div class=\"chips\">")
+	out.WriteString(chipHTML("目标长度", fmt.Sprintf("%d", view.TargetStateLength)))
+	out.WriteString(chipHTML("TTL", formatDuration(time.Duration(view.TTLSeconds)*time.Second)))
+	out.WriteString(chipHTML("探测间隔", formatDuration(time.Duration(view.IntervalSeconds)*time.Second)))
+	out.WriteString(chipHTML("失败重探阈值", fmt.Sprintf("%d", view.FailureReprobeThreshold)))
+	out.WriteString(chipHTML("每轮尝试", fmt.Sprintf("%d", view.MaxProbeAttempts)))
+	out.WriteString(chipHTML("代理数量", fmt.Sprintf("%d", len(view.Proxies))))
+	out.WriteString(chipHTML("注入", boolLabel(view.Inject)))
+	out.WriteString(chipHTML("采集", boolLabel(view.Harvest)))
+	out.WriteString(chipHTML("探测", boolLabel(view.Probe)))
+	out.WriteString(chipHTML("直连基线", boolLabel(view.DirectProbe)))
+	out.WriteString(chipHTML("显示 state", boolLabel(view.ShowStateValues)))
+	out.WriteString("</div>")
+	if !view.ShowStateValues {
+		out.WriteString("<p class=\"muted\">完整 state 默认隐藏；如需查看，请开启配置项 <code>show_state_values</code>。</p>")
+	}
+
+	out.WriteString("<div class=\"section\"><div class=\"section-title\">账号状态</div>")
+	if len(view.Accounts) == 0 {
+		out.WriteString("<p class=\"muted\">没有匹配的 Codex 账号。</p>")
 	} else {
-		out.WriteString("<table><thead><tr><th>Auth</th><th>Model</th><th>Length</th><th>Age</th><th>TTL left</th><th>Source</th><th>State</th></tr></thead><tbody>")
-		for _, entry := range view.States {
-			out.WriteString("<tr>")
-			writeCell(&out, entry.AuthID)
-			writeCell(&out, entry.Model)
-			writeCell(&out, fmt.Sprintf("%d", entry.Length))
-			writeCell(&out, formatDuration(time.Duration(entry.AgeSeconds)*time.Second))
-			writeCell(&out, formatDuration(time.Duration(entry.RemainingTTL)*time.Second))
-			writeCell(&out, entry.Source)
-			writeCell(&out, stateDisplay(entry.State, view.ShowStateValues))
-			out.WriteString("</tr>")
+		out.WriteString("<div class=\"grid\">")
+		for _, account := range view.Accounts {
+			out.WriteString("<section class=\"account\" style=\"--accent:")
+			out.WriteString(account.Color)
+			out.WriteString("\"><div class=\"account-head\"><div class=\"account-name\">")
+			out.WriteString(html.EscapeString(account.Label))
+			out.WriteString("</div><span class=\"swatch\"></span></div>")
+			for _, model := range account.Models {
+				writeModelBlock(&out, model, view.ShowStateValues)
+			}
+			out.WriteString("</section>")
 		}
-		out.WriteString("</tbody></table>")
+		out.WriteString("</div>")
 	}
+	out.WriteString("</div>")
 
-	out.WriteString("<h2>Recent Probes</h2>")
+	out.WriteString("<div class=\"section\"><div class=\"section-title\">最近探测</div>")
 	if len(view.Probes) == 0 {
-		out.WriteString("<p>No probe attempts yet.</p>")
+		out.WriteString("<p class=\"muted\">暂无探测记录。</p>")
 	} else {
-		out.WriteString("<table><thead><tr><th>Auth</th><th>Model</th><th>Length</th><th>Accepted</th><th>Source</th><th>Error</th></tr></thead><tbody>")
+		out.WriteString("<table><thead><tr><th>账号</th><th>模型</th><th>长度</th><th>结果</th><th>来源</th><th>错误</th></tr></thead><tbody>")
 		for _, record := range view.Probes {
-			out.WriteString("<tr>")
+			class := ""
+			if record.Accepted {
+				class = "match"
+			} else if record.LastError != "" {
+				class = "mismatch"
+			}
+			out.WriteString("<tr class=\"" + class + "\">")
 			writeCell(&out, record.AuthID)
 			writeCell(&out, record.Model)
 			writeCell(&out, fmt.Sprintf("%d", record.LastLength))
-			writeCell(&out, fmt.Sprintf("%t", record.Accepted))
+			if record.Accepted {
+				out.WriteString("<td class=\"match-cell\">命中 292</td>")
+			} else if record.LastError != "" {
+				out.WriteString("<td class=\"mismatch-cell\">未命中</td>")
+			} else {
+				out.WriteString("<td class=\"muted\">—</td>")
+			}
 			writeCell(&out, record.Source)
 			writeCell(&out, record.LastError)
 			out.WriteString("</tr>")
 		}
 		out.WriteString("</tbody></table>")
 	}
+	out.WriteString("</div>")
 
-	out.WriteString("<h2>Probe Attempt Log</h2>")
-	out.WriteString("<p><code>direct</code> is the optional no-proxy baseline; <code>proxy</code> contains every rotating-proxy attempt actually made. Direct baseline values are never cached.</p>")
-	if !view.ShowStateValues {
-		out.WriteString("<p>State values are hidden. Set <code>show_state_values: true</code> to display future values.</p>")
-	}
+	out.WriteString("<div class=\"section\"><div class=\"section-title\">探测日志</div>")
+	out.WriteString("<p class=\"muted\">绿色代表命中目标长度，红色代表未命中或失败；<code>direct</code> 为无代理基线，<code>proxy</code> 为实际代理轮询记录。</p>")
 	if len(view.ProbeLogs) == 0 {
-		out.WriteString("<p>No probe log entries yet.</p>")
+		out.WriteString("<p class=\"muted\">暂无日志。</p>")
 	} else {
-		out.WriteString("<table><thead><tr><th>Time</th><th>Age</th><th>Auth</th><th>Model</th><th>Route</th><th>Attempt</th><th>Length</th><th>Target match</th><th>Cached</th><th>State</th><th>Error</th></tr></thead><tbody>")
+		out.WriteString("<table><thead><tr><th>时间</th><th>账号</th><th>模型</th><th>路由</th><th>代理</th><th>尝试</th><th>长度</th><th>匹配</th><th>缓存</th><th>State</th><th>错误</th></tr></thead><tbody>")
 		for _, entry := range view.ProbeLogs {
-			out.WriteString("<tr>")
+			class := "mismatch"
+			if entry.TargetMatch {
+				class = "match"
+			}
+			out.WriteString("<tr class=\"" + class + "\">")
 			writeCell(&out, entry.Time)
-			writeCell(&out, formatDuration(time.Duration(entry.AgeSeconds)*time.Second))
 			writeCell(&out, entry.AuthID)
 			writeCell(&out, entry.Model)
 			writeCell(&out, entry.Route)
+			writeCell(&out, entry.Proxy)
 			writeCell(&out, fmt.Sprintf("%d", entry.Attempt))
 			writeCell(&out, fmt.Sprintf("%d", entry.Length))
 			writeCell(&out, fmt.Sprintf("%t", entry.TargetMatch))
@@ -333,26 +464,97 @@ func renderStatusPage(view statusView, triggered bool) []byte {
 		}
 		out.WriteString("</tbody></table>")
 	}
+	out.WriteString("</div>")
 
-	out.WriteString("<h2>Codex Auths</h2>")
+	out.WriteString("<div class=\"section\"><div class=\"section-title\">Codex 凭据</div>")
 	if len(view.Auths) == 0 {
-		out.WriteString("<p>No Codex credentials visible through host.auth.list.</p>")
+		out.WriteString("<p class=\"muted\">未发现可见的 Codex 凭据。</p>")
 	} else {
-		out.WriteString("<table><thead><tr><th>ID</th><th>Name</th><th>Label</th><th>Disabled</th><th>Unavailable</th></tr></thead><tbody>")
+		out.WriteString("<table><thead><tr><th>ID</th><th>名称</th><th>标签</th><th>邮箱</th><th>禁用</th><th>不可用</th></tr></thead><tbody>")
 		for _, auth := range view.Auths {
 			out.WriteString("<tr>")
 			writeCell(&out, auth.ID)
 			writeCell(&out, auth.Name)
-			writeCell(&out, firstNonEmpty(auth.Label, auth.Email))
-			writeCell(&out, fmt.Sprintf("%t", auth.Disabled))
-			writeCell(&out, fmt.Sprintf("%t", auth.Unavailable))
+			writeCell(&out, auth.Label)
+			writeCell(&out, auth.Email)
+			writeCell(&out, boolLabel(auth.Disabled))
+			writeCell(&out, boolLabel(auth.Unavailable))
 			out.WriteString("</tr>")
 		}
 		out.WriteString("</tbody></table>")
 	}
-	out.WriteString("<p>JSON: <code>?format=json</code></p>")
+	out.WriteString("</div>")
+	out.WriteString("<p class=\"muted\">JSON: <code>?format=json</code></p>")
+	out.WriteString("<script>")
+	out.WriteString("function fmt(left){if(left<=0)return '已过期';var h=Math.floor(left/3600),m=Math.floor((left%3600)/60),s=left%60;return (h>0?h+':':'')+String(m).padStart(2,'0')+':'+String(s).padStart(2,'0');}")
+	out.WriteString("function tick(){var now=Date.now();document.querySelectorAll('[data-countdown]').forEach(function(el){var ttl=Number(el.dataset.ttlSeconds||0);var left=Math.max(0,Math.ceil((Number(el.dataset.expiresAt)-now)/1000));el.textContent='倒计时 '+fmt(left);var bar=el.nextElementSibling.querySelector('i');if(bar){bar.style.width=(ttl>0?Math.min(100,left/ttl*100):0)+'%';}});}tick();setInterval(tick,1000);")
+	out.WriteString("</script>")
 	out.WriteString("</main></body></html>")
 	return out.Bytes()
+}
+
+func writeModelBlock(out *bytes.Buffer, model statusAccountModel, showState bool) {
+	out.WriteString("<div class=\"model-block\"><div class=\"model-row\"><span class=\"model-name\">")
+	out.WriteString(html.EscapeString(model.Model))
+	out.WriteString("</span>")
+	if model.HasState {
+		out.WriteString("<span class=\"pill ok\">292</span>")
+	} else {
+		out.WriteString("<span class=\"pill bad\">无 state</span>")
+	}
+	out.WriteString("</div>")
+	if model.HasState {
+		out.WriteString("<div class=\"countdown\" data-countdown data-expires-at=\"")
+		out.WriteString(fmt.Sprintf("%d", model.ExpiresAtUnix))
+		out.WriteString("\" data-ttl-seconds=\"")
+		out.WriteString(fmt.Sprintf("%d", model.RemainingTTLSeconds))
+		out.WriteString("\"></div><div class=\"bar\"><i></i></div>")
+	} else {
+		out.WriteString("<div class=\"countdown muted\">倒计时 —</div>")
+	}
+	out.WriteString("<div class=\"metrics\">")
+	out.WriteString(metricHTML("请求", fmt.Sprintf("%d", model.Requests)))
+	out.WriteString(metricHTML("成功", fmt.Sprintf("%d", model.Successes)))
+	out.WriteString(metricHTML("失败", fmt.Sprintf("%d", model.Failures)))
+	out.WriteString(metricHTML("Token", fmt.Sprintf("%d", model.TotalTokens)))
+	out.WriteString(metricHTML("平均首字", avgTTFTText(model.AvgTTFTSeconds)))
+	out.WriteString(metricHTML("连续失败", fmt.Sprintf("%d", model.ConsecutiveFailures)))
+	out.WriteString("</div>")
+	if showState && model.HasState && model.State != "" {
+		out.WriteString("<details class=\"state\"><summary>查看 state</summary><code>")
+		out.WriteString(html.EscapeString(model.State))
+		out.WriteString("</code></details>")
+	}
+	out.WriteString("</div>")
+}
+
+func chipHTML(label, value string) string {
+	return "<span class=\"chip\">" + html.EscapeString(label) + ": <b>" + html.EscapeString(value) + "</b></span>"
+}
+
+func metricHTML(label, value string) string {
+	return "<div class=\"metric\"><span class=\"metric-label\">" + html.EscapeString(label) + "</span><b>" + html.EscapeString(value) + "</b></div>"
+}
+
+func boolLabel(value bool) string {
+	if value {
+		return "开启"
+	}
+	return "关闭"
+}
+
+func avgTTFTText(seconds float64) string {
+	if seconds <= 0 {
+		return "—"
+	}
+	return fmt.Sprintf("%.2fs", seconds)
+}
+
+func accountColor(authID string) string {
+	hash := fnv.New32a()
+	_, _ = hash.Write([]byte(authID))
+	hue := hash.Sum32() % 360
+	return fmt.Sprintf("hsl(%d 65%% 45%%)", hue)
 }
 
 func visibleState(state string, show bool) string {
@@ -420,4 +622,16 @@ func redactedProxy(raw string) string {
 		return "(invalid)"
 	}
 	return proxyutil.Redact(parsed)
+}
+
+func redactedProxyList(raw string) []string {
+	proxies, errParse := parseProxyURLs(raw)
+	if errParse != nil {
+		return []string{"(invalid)"}
+	}
+	out := make([]string, 0, len(proxies))
+	for _, proxyURL := range proxies {
+		out = append(out, redactProxyURL(proxyURL))
+	}
+	return out
 }

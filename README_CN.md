@@ -56,12 +56,13 @@ plugins:
       show_state_values: true
       probe_log_limit: 200
       max_probe_attempts: 3
+      failure_reprobe_threshold: 3
       prompt: "."
 ```
 
 ### 配置项
 
-- `proxy`：轮换代理。支持 `host:port:user:password`、代理商常见的 `socks5://host:port:user:password`，以及标准 `socks5://user:password@host:port` / HTTP(S) URL；凭据会在内部自动 URL 编码，IPv6 地址需要方括号。
+- `proxy`：一个或多个轮换代理，每行一个。支持 `host:port:user:password`、代理商常见的 `socks5://host:port:user:password`，以及标准 `socks5://user:password@host:port` / HTTP(S) URL；凭据会在内部自动 URL 编码，IPv6 地址需要方括号。未命中目标长度时，下一次尝试自动轮询下一行代理。
 - `auth_ids`：精确的 Codex 运行时账号 ID。留空表示允许所有可见 Codex 账号。
 - `models`：精确的上游模型 ID。默认是 `gpt-5.6-sol`、`gpt-6-astra`。
 - `interval_seconds`：上一轮完整探测结束后，到下一轮的等待时间。默认 `300`。
@@ -74,10 +75,11 @@ plugins:
 - `show_state_values`：在状态页和 JSON 日志中保留并显示之后捕获到的完整 state。默认 `false`；只应在受保护的管理入口启用。
 - `probe_log_limit`：内存中保留的探测日志条数。默认 `200`，最大 `1000`。
 - `max_probe_attempts`：每轮中每个账号+模型最多尝试次数。默认 `3`。
+- `failure_reprobe_threshold`：当前 state 倒计时窗口内，生产请求连续失败达到该次数后自动对该账号+模型重新探测。默认 `3`；负数表示关闭。
 - `max_output_tokens`：已弃用的兼容配置。Codex 上游拒绝 token 限制参数，因此插件会忽略该项。
 - `prompt`：最小探测输入。默认 `.`。
 
-启用 `probe` 时必须配置 `proxy`。长度不符合要求的 state 会消耗一次尝试，但不会写入缓存。
+启用 `probe` 时 `proxy` 必须至少配置一条。长度不符合要求的 state 会消耗一次尝试，但不会写入缓存。
 
 ## 是否会注入到当前账号后续所有 CPA 请求
 
@@ -101,7 +103,7 @@ plugins:
 - `GET .../status?format=json`：JSON 状态。
 - `POST .../status` 或 `GET .../status?op=probe`：立即排队执行一轮探测。
 
-页面永远不会显示代理用户名/密码或 Access Token。只有配置 `show_state_values: true` 后，后续捕获到的 state 原文才会进入页面和 JSON 日志；启用之前的记录不会恢复原文。
+页面顶部显示每个账号的彩色卡片，包含当前 state 长度、实时倒计时，以及当前窗口内的请求数、成功数、总 Token 和平均首字时间；下面显示最近探测和逐次代理尝试。命中目标长度的记录显示绿色，未命中或失败显示红色。页面永远不会显示代理用户名/密码或 Access Token。只有配置 `show_state_values: true` 后，后续捕获到的 state 原文才会进入页面和 JSON 日志；启用之前的记录不会恢复原文。
 
 ## 本地构建与验证
 

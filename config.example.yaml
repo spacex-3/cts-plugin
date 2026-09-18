@@ -6,7 +6,11 @@ plugins:
     codex-turn-state:
       enabled: true
       priority: 100
+      # 支持多行代理；未命中目标长度时自动轮询下一条。
       proxy: "proxy.example:8080:username:password"
+      # proxy: |
+      #   proxy-one.example:8080:user:pass
+      #   socks5://proxy-two.example:10000:user:pass
       auth_ids:
         - "codex-auth-id-1"
       models:
@@ -22,4 +26,5 @@ plugins:
       show_state_values: true
       probe_log_limit: 200
       max_probe_attempts: 3
+      failure_reprobe_threshold: 3
       prompt: "."
