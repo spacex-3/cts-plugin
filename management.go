@@ -51,6 +51,7 @@ type statusView struct {
 	FailureReprobeThreshold int               `json:"failure_reprobe_threshold"`
 	MaxProbeAttempts        int               `json:"max_probe_attempts"`
 	NextProbeAtUnix         int64             `json:"next_probe_at_unix,omitempty"`
+	ExpiredStates           []statusState     `json:"expired_states,omitempty"`
 	Inject                  bool              `json:"inject"`
 	Harvest                 bool              `json:"harvest"`
 	Probe                   bool              `json:"probe"`
@@ -262,6 +263,17 @@ func buildStatusView() statusView {
 	if !snap.NextProbeAt.IsZero() {
 		view.NextProbeAtUnix = snap.NextProbeAt.Unix()
 	}
+	for _, entry := range snap.ExpiredEntries {
+		view.ExpiredStates = append(view.ExpiredStates, statusState{
+			AuthID:       entry.AuthID,
+			Model:        entry.Model,
+			Length:       entry.Length,
+			AgeSeconds:   durationSeconds(snap.Now.Sub(entry.StoredAt)),
+			RemainingTTL: 0,
+			Source:       entry.Source,
+			State:        visibleState(entry.State, cfg.showStateValuesEnabled()),
+		})
+	}
 	entryByKey := make(map[cacheKey]cacheEntry, len(snap.Entries))
 	for _, entry := range snap.Entries {
 		entryByKey[makeCacheKey(entry.AuthID, entry.Model)] = entry
@@ -420,6 +432,7 @@ func renderStatusPage(view statusView, triggered bool) []byte {
 	out.WriteString(".proxy-editor{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin:8px 0}.proxy-editor summary{cursor:pointer;color:var(--blue);font-size:12.5px;font-weight:700}.proxy-editor textarea{display:block;width:100%;min-height:110px;margin:8px 0;padding:8px;font:12px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;border:1px solid var(--line);border-radius:6px;resize:vertical}.proxy-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.proxy-actions select{padding:5px 8px;border:1px solid var(--line);border-radius:6px}")
 	out.WriteString(".manual-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px;margin:8px 0}.manual-grid select{width:100%;padding:5px 8px;border:1px solid var(--line);border-radius:6px}")
 	out.WriteString(".chips{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0}.chip{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:11.5px}")
+	out.WriteString(".injection-flag{display:inline-flex;align-items:center;gap:4px;color:var(--green);font-weight:700;font-size:11.5px}")
 	out.WriteString(".account-row{vertical-align:top}.account-name{font-weight:700;font-size:12.5px}.swatch{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;background:var(--accent,#94a3b8)}")
 	out.WriteString(".account-models{display:flex;gap:5px;align-items:stretch}.account-model{flex:1 1 0;min-width:0;background:#f8fafc;border:1px solid #edf0f3;border-radius:6px;padding:4px 5px}")
 	out.WriteString(".model-block{padding:2px 0}.model-block:first-child{border-top:0}")
@@ -481,6 +494,14 @@ func renderStatusPage(view statusView, triggered bool) []byte {
 	out.WriteString(chipHTML("直连基线", boolLabel(view.DirectProbe)))
 	out.WriteString(chipHTML("显示 state", boolLabel(view.ShowStateValues)))
 	out.WriteString("</div>")
+	if len(view.ExpiredStates) > 0 {
+		out.WriteString("<div class=\"banner\" style=\"border-left-color:var(--amber);background:var(--amber-bg);color:var(--amber)\">当前没有新的 292 state，以下账号仍在使用上一次成功 state 继续注入，直到拿到新的 292：")
+		for _, entry := range view.ExpiredStates {
+			out.WriteString(" ")
+			out.WriteString(html.EscapeString(entry.AuthID + "/" + entry.Model))
+		}
+		out.WriteString("</div>")
+	}
 	if !view.ShowStateValues {
 		out.WriteString("<p class=\"muted\">完整 state 默认隐藏；如需查看，请开启配置项 <code>show_state_values</code>。</p>")
 	}
@@ -598,6 +619,9 @@ func renderStatusPage(view statusView, triggered bool) []byte {
 	out.WriteString("</div>")
 
 	out.WriteString("<div class=\"section\"><div class=\"section-title\">注入记录</div>")
+	if len(view.Injections) > 0 {
+		out.WriteString("<div class=\"injection-flag\">✓ 最近有请求已注入 state</div>")
+	}
 	if len(view.Injections) == 0 {
 		out.WriteString("<p class=\"muted\">暂无注入记录。</p>")
 	} else {

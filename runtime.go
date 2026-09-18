@@ -494,31 +494,34 @@ func (r *pluginRuntime) snapshotStatus() runtimeSnapshot {
 	injections := append([]injectionLogEntry(nil), r.injections...)
 	r.mu.Unlock()
 	entries := r.cache.snapshot()
+	expiredEntries := r.cache.expiredSnapshot()
 	return runtimeSnapshot{
-		Config:      cfg,
-		GlobalErr:   globalErr,
-		Entries:     entries,
-		Records:     records,
-		Windows:     windows,
-		Logs:        logs,
-		Injections:  injections,
-		Now:         r.now(),
-		TTL:         cfg.ttl(),
-		TargetLen:   cfg.targetLength(),
-		NextProbeAt: nextProbeAt,
+		Config:         cfg,
+		GlobalErr:      globalErr,
+		Entries:        entries,
+		ExpiredEntries: expiredEntries,
+		Records:        records,
+		Windows:        windows,
+		Logs:           logs,
+		Injections:     injections,
+		Now:            r.now(),
+		TTL:            cfg.ttl(),
+		TargetLen:      cfg.targetLength(),
+		NextProbeAt:    nextProbeAt,
 	}
 }
 
 type runtimeSnapshot struct {
-	Config      pluginConfig
-	GlobalErr   string
-	Entries     []cacheEntry
-	Records     []probeRecord
-	Windows     map[cacheKey]windowStats
-	Logs        []probeLogEntry
-	Injections  []injectionLogEntry
-	Now         time.Time
-	TTL         time.Duration
-	TargetLen   int
-	NextProbeAt time.Time
+	Config         pluginConfig
+	GlobalErr      string
+	Entries        []cacheEntry
+	ExpiredEntries []cacheEntry
+	Records        []probeRecord
+	Windows        map[cacheKey]windowStats
+	Logs           []probeLogEntry
+	Injections     []injectionLogEntry
+	Now            time.Time
+	TTL            time.Duration
+	TargetLen      int
+	NextProbeAt    time.Time
 }

@@ -6,7 +6,7 @@
       "name": "Codex Turn State Probe",
       "description": "通过轮换代理探测 Codex turn state，并从正常流量采集；支持直连基线和逐次代理探测日志，按实际账号和模型缓存后注入，不跨账号或模型共享。",
       "author": "spacex-3",
-      "version": "0.3.11",
+      "version": "0.3.12",
       "repository": "https://github.com/spacex-3/cts-plugin",
       "homepage": "https://github.com/spacex-3/cts-plugin/blob/main/README_CN.md",
       "license": "MIT",

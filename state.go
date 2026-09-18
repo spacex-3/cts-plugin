@@ -151,10 +151,6 @@ func (c *stateCache) lookup(authID, model string) (cacheEntry, bool) {
 	if !ok {
 		return cacheEntry{}, false
 	}
-	if c.expiredLocked(entry, c.nowLocked()) {
-		delete(c.entries, key)
-		return cacheEntry{}, false
-	}
 	return entry, true
 }
 
@@ -164,10 +160,25 @@ func (c *stateCache) snapshot() []cacheEntry {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.removeExpiredLocked(c.nowLocked())
 	out := make([]cacheEntry, 0, len(c.entries))
 	for _, entry := range c.entries {
 		out = append(out, entry)
+	}
+	return out
+}
+
+func (c *stateCache) expiredSnapshot() []cacheEntry {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	now := c.nowLocked()
+	out := make([]cacheEntry, 0)
+	for _, entry := range c.entries {
+		if c.expiredLocked(entry, now) {
+			out = append(out, entry)
+		}
 	}
 	return out
 }

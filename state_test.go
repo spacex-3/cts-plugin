@@ -20,8 +20,8 @@ func TestStateCacheTargetAndExpiration(t *testing.T) {
 	}
 
 	now = now.Add(time.Hour)
-	if _, ok := cache.lookup("auth", "model"); ok {
-		t.Fatal("state should expire at the TTL boundary")
+	if _, ok := cache.lookup("auth", "model"); !ok {
+		t.Fatal("state should remain usable after the TTL boundary")
 	}
 }
 
