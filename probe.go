@@ -44,8 +44,11 @@ func (rt *pluginRuntime) runProbeLoop(ctx context.Context) {
 	if interval <= 0 {
 		interval = time.Duration(defaultIntervalSeconds) * time.Second
 	}
-	rt.probeAll(ctx)
 	rt.setNextProbeAt(rt.now().Add(interval))
+	if len(rt.cache.snapshot()) == 0 {
+		rt.probeAll(ctx)
+		rt.setNextProbeAt(rt.now().Add(interval))
+	}
 	timer := time.NewTimer(interval)
 	defer timer.Stop()
 	for {

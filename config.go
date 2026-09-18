@@ -28,7 +28,7 @@ const (
 )
 
 var (
-	pluginVersion      = "0.3.10"
+	pluginVersion      = "0.3.11"
 	defaultProbeModels = []string{"gpt-5.6-sol", "gpt-6-astra"}
 )
 
