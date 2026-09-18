@@ -102,3 +102,25 @@ func TestHandleUsageQueuesTargetedReprobeAfterConsecutiveFailures(t *testing.T) 
 		t.Fatal("failed window should mark reprobe queued")
 	}
 }
+
+func TestObserveStateRefreshesStoredAtForDirectMatch(t *testing.T) {
+	now := time.Date(2026, time.September, 18, 16, 0, 0, 0, time.UTC)
+	rt := newRuntime()
+	rt.nowFunc = func() time.Time { return now }
+	rt.config = normalizeConfig(pluginConfig{TargetStateLength: 3, TTLSeconds: 3600})
+	rt.cache = newStateCache(time.Hour, 3, rt.nowFunc)
+
+	if !rt.observeState("auth-1", "model-1", "abc", "probe") {
+		t.Fatal("expected initial state to be cached")
+	}
+	before, _ := rt.cache.lookup("auth-1", "model-1")
+
+	now = now.Add(30 * time.Minute)
+	if !rt.observeState("auth-1", "model-1", "abc", "direct") {
+		t.Fatal("expected direct match to be cached")
+	}
+	after, _ := rt.cache.lookup("auth-1", "model-1")
+	if after.StoredAt.Equal(before.StoredAt) {
+		t.Fatalf("direct match should refresh StoredAt, before=%s after=%s", before.StoredAt, after.StoredAt)
+	}
+}

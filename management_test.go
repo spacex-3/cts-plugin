@@ -61,10 +61,10 @@ func TestRenderStatusPageUsesMatchAndMismatchColors(t *testing.T) {
 			TargetMatch: false,
 		}},
 	}, false))
-	if !strings.Contains(page, "class=\"match\"") {
+	if !strings.Contains(page, "probe-log-row match") {
 		t.Fatal("status page should mark matching logs green")
 	}
-	if !strings.Contains(page, "class=\"mismatch\"") {
+	if !strings.Contains(page, "probe-log-row mismatch") {
 		t.Fatal("status page should mark nonmatching logs red")
 	}
 	if !strings.Contains(page, "平均首字") || !strings.Contains(page, "倒计时") {

@@ -25,6 +25,7 @@ type pluginRuntime struct {
 	nowFunc       func() time.Time
 	trigger       chan struct{}
 	targetTrigger chan cacheKey
+	nextProbeAt   time.Time
 	cancel        context.CancelFunc
 	wg            sync.WaitGroup
 }
@@ -287,7 +288,7 @@ func (r *pluginRuntime) observeState(authID, model, state, source string) bool {
 	if state == "" {
 		return false
 	}
-	refresh := strings.EqualFold(strings.TrimSpace(source), "probe")
+	refresh := strings.EqualFold(strings.TrimSpace(source), "probe") || strings.EqualFold(strings.TrimSpace(source), "direct")
 	entry, accepted, reset := r.cache.storeTarget(authID, model, state, source, refresh)
 	if accepted && reset {
 		key := makeCacheKey(authID, model)
@@ -464,6 +465,15 @@ func (r *pluginRuntime) setGlobalProbeError(errText string) {
 	r.globalErr = errText
 }
 
+func (r *pluginRuntime) setNextProbeAt(at time.Time) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.nextProbeAt = at
+	r.mu.Unlock()
+}
+
 func (r *pluginRuntime) snapshotStatus() runtimeSnapshot {
 	if r == nil {
 		return runtimeSnapshot{}
@@ -471,6 +481,7 @@ func (r *pluginRuntime) snapshotStatus() runtimeSnapshot {
 	r.mu.Lock()
 	cfg := clonePluginConfig(r.config)
 	globalErr := r.globalErr
+	nextProbeAt := r.nextProbeAt
 	records := make([]probeRecord, 0, len(r.statuses))
 	for _, record := range r.statuses {
 		records = append(records, record)
@@ -484,28 +495,30 @@ func (r *pluginRuntime) snapshotStatus() runtimeSnapshot {
 	r.mu.Unlock()
 	entries := r.cache.snapshot()
 	return runtimeSnapshot{
-		Config:     cfg,
-		GlobalErr:  globalErr,
-		Entries:    entries,
-		Records:    records,
-		Windows:    windows,
-		Logs:       logs,
-		Injections: injections,
-		Now:        r.now(),
-		TTL:        cfg.ttl(),
-		TargetLen:  cfg.targetLength(),
+		Config:      cfg,
+		GlobalErr:   globalErr,
+		Entries:     entries,
+		Records:     records,
+		Windows:     windows,
+		Logs:        logs,
+		Injections:  injections,
+		Now:         r.now(),
+		TTL:         cfg.ttl(),
+		TargetLen:   cfg.targetLength(),
+		NextProbeAt: nextProbeAt,
 	}
 }
 
 type runtimeSnapshot struct {
-	Config     pluginConfig
-	GlobalErr  string
-	Entries    []cacheEntry
-	Records    []probeRecord
-	Windows    map[cacheKey]windowStats
-	Logs       []probeLogEntry
-	Injections []injectionLogEntry
-	Now        time.Time
-	TTL        time.Duration
-	TargetLen  int
+	Config      pluginConfig
+	GlobalErr   string
+	Entries     []cacheEntry
+	Records     []probeRecord
+	Windows     map[cacheKey]windowStats
+	Logs        []probeLogEntry
+	Injections  []injectionLogEntry
+	Now         time.Time
+	TTL         time.Duration
+	TargetLen   int
+	NextProbeAt time.Time
 }

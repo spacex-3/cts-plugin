@@ -45,6 +45,7 @@ func (rt *pluginRuntime) runProbeLoop(ctx context.Context) {
 		interval = time.Duration(defaultIntervalSeconds) * time.Second
 	}
 	rt.probeAll(ctx)
+	rt.setNextProbeAt(rt.now().Add(interval))
 	timer := time.NewTimer(interval)
 	defer timer.Stop()
 	for {
@@ -53,10 +54,12 @@ func (rt *pluginRuntime) runProbeLoop(ctx context.Context) {
 			return
 		case <-rt.trigger:
 			rt.probeAll(ctx)
+			rt.setNextProbeAt(rt.now().Add(interval))
 		case key := <-rt.targetTrigger:
 			rt.probeKey(ctx, key)
 		case <-timer.C:
 			rt.probeAll(ctx)
+			rt.setNextProbeAt(rt.now().Add(interval))
 		}
 		if !timer.Stop() {
 			select {

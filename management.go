@@ -50,6 +50,7 @@ type statusView struct {
 	TTLSeconds              int               `json:"ttl_seconds"`
 	FailureReprobeThreshold int               `json:"failure_reprobe_threshold"`
 	MaxProbeAttempts        int               `json:"max_probe_attempts"`
+	NextProbeAtUnix         int64             `json:"next_probe_at_unix,omitempty"`
 	Inject                  bool              `json:"inject"`
 	Harvest                 bool              `json:"harvest"`
 	Probe                   bool              `json:"probe"`
@@ -258,6 +259,9 @@ func buildStatusView() statusView {
 		ProbeLogLimit:           cfg.probeLogLimit(),
 		GlobalError:             snap.GlobalErr,
 	}
+	if !snap.NextProbeAt.IsZero() {
+		view.NextProbeAtUnix = snap.NextProbeAt.Unix()
+	}
 	entryByKey := make(map[cacheKey]cacheEntry, len(snap.Entries))
 	for _, entry := range snap.Entries {
 		entryByKey[makeCacheKey(entry.AuthID, entry.Model)] = entry
@@ -412,15 +416,16 @@ func renderStatusPage(view statusView, triggered bool) []byte {
 	out.WriteString(".ok{color:var(--green);background:var(--green-bg)}.bad{color:var(--red);background:var(--red-bg)}.warn{color:var(--amber);background:var(--amber-bg)}.info{color:var(--blue);background:var(--blue-bg)}.muted{color:var(--muted)}")
 	out.WriteString(".banner{border-left:4px solid var(--red);background:var(--red-bg);color:var(--red);padding:8px 12px;border-radius:4px;margin:12px 0}")
 	out.WriteString(".toolbar{display:flex;align-items:center;gap:8px;margin:14px 0 2px}")
+	out.WriteString(".filter-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:8px 0}.filter-bar select{padding:4px 6px;border:1px solid var(--line);border-radius:6px}.pager{display:flex;align-items:center;gap:8px;margin-top:8px}.pager button{padding:4px 9px}")
 	out.WriteString(".proxy-editor{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin:8px 0}.proxy-editor summary{cursor:pointer;color:var(--blue);font-size:12.5px;font-weight:700}.proxy-editor textarea{display:block;width:100%;min-height:110px;margin:8px 0;padding:8px;font:12px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;border:1px solid var(--line);border-radius:6px;resize:vertical}.proxy-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.proxy-actions select{padding:5px 8px;border:1px solid var(--line);border-radius:6px}")
 	out.WriteString(".manual-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px;margin:8px 0}.manual-grid select{width:100%;padding:5px 8px;border:1px solid var(--line);border-radius:6px}")
 	out.WriteString(".chips{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0}.chip{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:11.5px}")
 	out.WriteString(".account-row{vertical-align:top}.account-name{font-weight:700;font-size:12.5px}.swatch{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;background:var(--accent,#94a3b8)}")
-	out.WriteString(".account-models{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:6px}.account-model{background:#f8fafc;border:1px solid #edf0f3;border-radius:6px;padding:6px 7px}")
+	out.WriteString(".account-models{display:flex;gap:5px;align-items:stretch}.account-model{flex:1 1 0;min-width:0;background:#f8fafc;border:1px solid #edf0f3;border-radius:6px;padding:4px 5px}")
 	out.WriteString(".model-block{padding:2px 0}.model-block:first-child{border-top:0}")
 	out.WriteString(".model-row{display:flex;align-items:center;justify-content:space-between;gap:8px}.model-name{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;font-weight:700;color:#111827}")
 	out.WriteString(".countdown{margin:4px 0 5px;color:#111827}.bar{height:5px;border-radius:999px;background:#e8ebef;overflow:hidden}.bar>i{display:block;height:100%;background:var(--green);transition:width 1s linear}")
-	out.WriteString(".metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:5px}.metric{background:#f8fafc;border:1px solid #edf0f3;border-radius:5px;padding:5px 7px}.metric-label{display:block;color:#4b5563;font-size:10.5px}.metric b{font-size:12.5px;font-weight:700;color:#111827}")
+	out.WriteString(".metrics{display:grid;grid-template-columns:repeat(2,1fr);gap:4px}.metric{background:#f8fafc;border:1px solid #edf0f3;border-radius:5px;padding:4px 5px}.metric-label{display:block;color:#4b5563;font-size:10px}.metric b{font-size:11.5px;font-weight:700;color:#111827}")
 	out.WriteString("details.state{margin-top:7px}summary{cursor:pointer;color:var(--blue);font-size:11.5px}details.state code{display:block;max-height:150px;overflow:auto;white-space:pre-wrap;margin-top:5px}")
 	out.WriteString("tr.match{background:var(--green-bg)}tr.mismatch{background:var(--red-bg)}.match-cell{color:var(--green);font-weight:700}.mismatch-cell{color:var(--red);font-weight:700}")
 	out.WriteString("@media(max-width:640px){.grid{grid-template-columns:1fr}main,header{padding-left:10px;padding-right:10px}}")
@@ -462,6 +467,11 @@ func renderStatusPage(view statusView, triggered bool) []byte {
 	out.WriteString(chipHTML("目标长度", fmt.Sprintf("%d", view.TargetStateLength)))
 	out.WriteString(chipHTML("TTL", formatDuration(time.Duration(view.TTLSeconds)*time.Second)))
 	out.WriteString(chipHTML("探测间隔", formatDuration(time.Duration(view.IntervalSeconds)*time.Second)))
+	if view.NextProbeAtUnix > 0 {
+		out.WriteString("<span class=\"chip\">下次探测 <b id=\"next-probe-countdown\" data-expires-at=\"")
+		out.WriteString(fmt.Sprintf("%d", view.NextProbeAtUnix))
+		out.WriteString("\">--</b></span>")
+	}
 	out.WriteString(chipHTML("失败重探阈值", fmt.Sprintf("%d", view.FailureReprobeThreshold)))
 	out.WriteString(chipHTML("每轮尝试", fmt.Sprintf("%d", view.MaxProbeAttempts)))
 	out.WriteString(chipHTML("代理数量", fmt.Sprintf("%d", len(view.Proxies))))
@@ -523,13 +533,52 @@ func renderStatusPage(view statusView, triggered bool) []byte {
 	if len(view.ProbeLogs) == 0 {
 		out.WriteString("<p class=\"muted\">暂无日志。</p>")
 	} else {
-		out.WriteString("<table><thead><tr><th>时间</th><th>账号</th><th>模型</th><th>路由</th><th>代理</th><th>尝试</th><th>长度</th><th>匹配</th><th>缓存</th><th>State</th><th>错误</th></tr></thead><tbody>")
+		out.WriteString("<div class=\"filter-bar\"><label>账号 <select id=\"probe-filter-auth\"><option value=\"\">全部</option>")
+		for _, authID := range uniqueStrings(func() []string {
+			values := make([]string, 0, len(view.ProbeLogs))
+			for _, entry := range view.ProbeLogs {
+				values = append(values, entry.AuthID)
+			}
+			return values
+		}()) {
+			out.WriteString("<option value=\"")
+			out.WriteString(html.EscapeString(authID))
+			out.WriteString("\">")
+			out.WriteString(html.EscapeString(authID))
+			out.WriteString("</option>")
+		}
+		out.WriteString("</select></label><label>模型 <select id=\"probe-filter-model\"><option value=\"\">全部</option>")
+		for _, model := range uniqueStrings(func() []string {
+			values := make([]string, 0, len(view.ProbeLogs))
+			for _, entry := range view.ProbeLogs {
+				values = append(values, entry.Model)
+			}
+			return values
+		}()) {
+			out.WriteString("<option value=\"")
+			out.WriteString(html.EscapeString(model))
+			out.WriteString("\">")
+			out.WriteString(html.EscapeString(model))
+			out.WriteString("</option>")
+		}
+		out.WriteString("</select></label><label>匹配 <select id=\"probe-filter-match\"><option value=\"\">全部</option><option value=\"1\">命中</option><option value=\"0\">未命中</option></select></label></div>")
+		out.WriteString("<table id=\"probe-log-table\"><thead><tr><th>时间</th><th>账号</th><th>模型</th><th>路由</th><th>代理</th><th>尝试</th><th>长度</th><th>匹配</th><th>缓存</th><th>State</th><th>错误</th></tr></thead><tbody>")
 		for _, entry := range view.ProbeLogs {
 			class := "mismatch"
 			if entry.TargetMatch {
 				class = "match"
 			}
-			out.WriteString("<tr class=\"" + class + "\">")
+			out.WriteString("<tr class=\"probe-log-row " + class + "\" data-auth=\"")
+			out.WriteString(html.EscapeString(entry.AuthID))
+			out.WriteString("\" data-model=\"")
+			out.WriteString(html.EscapeString(entry.Model))
+			out.WriteString("\" data-match=\"")
+			if entry.TargetMatch {
+				out.WriteString("1")
+			} else {
+				out.WriteString("0")
+			}
+			out.WriteString("\">")
 			writeCell(&out, entry.Time)
 			writeCell(&out, entry.AuthID)
 			writeCell(&out, entry.Model)
@@ -544,6 +593,7 @@ func renderStatusPage(view statusView, triggered bool) []byte {
 			out.WriteString("</tr>")
 		}
 		out.WriteString("</tbody></table>")
+		out.WriteString("<div class=\"pager\"><button type=\"button\" id=\"probe-log-prev\">上一页</button><span id=\"probe-log-info\" class=\"muted\"></span><button type=\"button\" id=\"probe-log-next\">下一页</button></div>")
 	}
 	out.WriteString("</div>")
 
@@ -551,9 +601,9 @@ func renderStatusPage(view statusView, triggered bool) []byte {
 	if len(view.Injections) == 0 {
 		out.WriteString("<p class=\"muted\">暂无注入记录。</p>")
 	} else {
-		out.WriteString("<table><thead><tr><th>时间</th><th>账号</th><th>模型</th><th>长度</th><th>来源</th></tr></thead><tbody>")
+		out.WriteString("<table id=\"injection-table\"><thead><tr><th>时间</th><th>账号</th><th>模型</th><th>长度</th><th>来源</th></tr></thead><tbody>")
 		for _, entry := range view.Injections {
-			out.WriteString("<tr>")
+			out.WriteString("<tr class=\"injection-row\">")
 			writeCell(&out, entry.Time)
 			writeCell(&out, entry.AuthID)
 			writeCell(&out, entry.Model)
@@ -562,6 +612,7 @@ func renderStatusPage(view statusView, triggered bool) []byte {
 			out.WriteString("</tr>")
 		}
 		out.WriteString("</tbody></table>")
+		out.WriteString("<div class=\"pager\"><button type=\"button\" id=\"injection-prev\">上一页</button><span id=\"injection-info\" class=\"muted\"></span><button type=\"button\" id=\"injection-next\">下一页</button></div>")
 	}
 	out.WriteString("</div>")
 
@@ -590,8 +641,10 @@ func renderStatusPage(view statusView, triggered bool) []byte {
 	out.WriteString("var saveBtn=document.getElementById('save-proxies'),proxyLines=document.getElementById('proxy-lines'),proxyScheme=document.getElementById('proxy-scheme'),proxyStatus=document.getElementById('proxy-status');if(saveBtn){saveBtn.addEventListener('click',function(){saveBtn.disabled=true;proxyStatus.textContent='正在保存...';fetch(location.pathname+'?op=save_proxies&scheme='+encodeURIComponent(proxyScheme.value),{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'proxy_lines='+encodeURIComponent(proxyLines.value)}).then(function(r){return r.json().catch(function(){return{};});}).then(function(d){if(d&&d.ok){proxyStatus.textContent='已保存，开始探测。';}else{proxyStatus.textContent='保存失败，请检查格式。';}}).catch(function(){proxyStatus.textContent='保存失败，请重试。';}).finally(function(){saveBtn.disabled=false;});});}")
 	out.WriteString("var manualSaveBtn=document.getElementById('save-manual-state'),manualAuth=document.getElementById('manual-auth'),manualModel=document.getElementById('manual-model'),manualState=document.getElementById('manual-state'),manualStatus=document.getElementById('manual-status');if(manualSaveBtn){manualSaveBtn.addEventListener('click',function(){if(!manualState.value.trim()){manualStatus.textContent='请粘贴 state。';return;}manualSaveBtn.disabled=true;manualStatus.textContent='正在保存...';fetch(location.pathname+'?op=save_manual_state',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'auth_id='+encodeURIComponent(manualAuth.value)+'&model='+encodeURIComponent(manualModel.value)+'&state='+encodeURIComponent(manualState.value)}).then(function(r){return r.json().catch(function(){return{};});}).then(function(d){manualStatus.textContent=d&&d.ok?'已保存并启用。':'保存失败，请检查账号/模型。';}).catch(function(){manualStatus.textContent='保存失败，请重试。';}).finally(function(){manualSaveBtn.disabled=false;});});}")
 	out.WriteString("var accountSaveBtn=document.getElementById('save-probe-accounts'),selectAll=document.getElementById('probe-select-all'),accountStatus=document.getElementById('probe-account-status');if(selectAll){selectAll.addEventListener('change',function(){document.querySelectorAll('.probe-account').forEach(function(el){el.checked=selectAll.checked;});});}if(accountSaveBtn){accountSaveBtn.addEventListener('click',function(){var ids=Array.from(document.querySelectorAll('.probe-account:checked')).map(function(el){return el.dataset.auth;});accountSaveBtn.disabled=true;if(accountStatus)accountStatus.textContent='正在保存...';fetch(location.pathname+'?op=save_probe_accounts',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'auth_ids='+encodeURIComponent(ids.join(','))}).then(function(r){return r.json().catch(function(){return{};});}).then(function(d){if(accountStatus)accountStatus.textContent=d&&d.ok?'已保存，开始探测。':'保存失败。';}).catch(function(){if(accountStatus)accountStatus.textContent='保存失败，请重试。';}).finally(function(){accountSaveBtn.disabled=false;});});}")
+	out.WriteString("var probeRows=Array.prototype.slice.call(document.querySelectorAll('.probe-log-row')),probePage=0,probeSize=10;function filteredProbeRows(){var auth=document.getElementById('probe-filter-auth'),model=document.getElementById('probe-filter-model'),match=document.getElementById('probe-filter-match');return probeRows.filter(function(r){return (!auth||!auth.value||r.dataset.auth===auth.value)&&(!model||!model.value||r.dataset.model===model.value)&&(!match||!match.value||r.dataset.match===match.value);});}function renderProbePage(){var rows=filteredProbeRows(),pages=Math.ceil(rows.length/probeSize);if(probePage>=pages)probePage=Math.max(0,pages-1);probeRows.forEach(function(r){r.style.display='none';});rows.slice(probePage*probeSize,probePage*probeSize+probeSize).forEach(function(r){r.style.display='';});var info=document.getElementById('probe-log-info');if(info)info.textContent=rows.length?(probePage+1)+'/'+pages+' 页 · '+rows.length+' 条':'0 条';}function bindProbePage(){var auth=document.getElementById('probe-filter-auth'),model=document.getElementById('probe-filter-model'),match=document.getElementById('probe-filter-match');[auth,model,match].forEach(function(sel){if(sel)sel.addEventListener('change',function(){probePage=0;renderProbePage();});});var prev=document.getElementById('probe-log-prev'),next=document.getElementById('probe-log-next');if(prev)prev.addEventListener('click',function(){probePage=Math.max(0,probePage-1);renderProbePage();});if(next)next.addEventListener('click',function(){probePage++;renderProbePage();});}if(probeRows.length){renderProbePage();bindProbePage();}")
+	out.WriteString("var injectionRows=Array.prototype.slice.call(document.querySelectorAll('.injection-row')),injectionPage=0,injectionSize=10;function renderInjectionPage(){var pages=Math.ceil(injectionRows.length/injectionSize);if(injectionPage>=pages)injectionPage=Math.max(0,pages-1);injectionRows.forEach(function(r){r.style.display='none';});injectionRows.slice(injectionPage*injectionSize,injectionPage*injectionSize+injectionSize).forEach(function(r){r.style.display='';});var info=document.getElementById('injection-info');if(info)info.textContent=injectionRows.length?(injectionPage+1)+'/'+pages+' 页 · '+injectionRows.length+' 条':'0 条';}function bindInjectionPage(){var prev=document.getElementById('injection-prev'),next=document.getElementById('injection-next');if(prev)prev.addEventListener('click',function(){injectionPage=Math.max(0,injectionPage-1);renderInjectionPage();});if(next)next.addEventListener('click',function(){injectionPage++;renderInjectionPage();});}if(injectionRows.length){renderInjectionPage();bindInjectionPage();}")
 	out.WriteString("function fmt(left){if(left<=0)return '已过期';var h=Math.floor(left/3600),m=Math.floor((left%3600)/60),s=left%60;return (h>0?h+':':'')+String(m).padStart(2,'0')+':'+String(s).padStart(2,'0');}")
-	out.WriteString("function tick(){var now=Date.now();document.querySelectorAll('[data-countdown]').forEach(function(el){var ttl=Number(el.dataset.ttlSeconds||0);var left=Math.max(0,Math.ceil((Number(el.dataset.expiresAt)-now)/1000));el.textContent='倒计时 '+fmt(left);var bar=el.nextElementSibling.querySelector('i');if(bar){bar.style.width=(ttl>0?Math.min(100,left/ttl*100):0)+'%';}});}tick();setInterval(tick,1000);")
+	out.WriteString("function tick(){var now=Date.now();document.querySelectorAll('[data-countdown]').forEach(function(el){var ttl=Number(el.dataset.ttlSeconds||0);var left=Math.max(0,Math.ceil((Number(el.dataset.expiresAt)-now)/1000));el.textContent='倒计时 '+fmt(left);var bar=el.nextElementSibling.querySelector('i');if(bar){bar.style.width=(ttl>0?Math.min(100,left/ttl*100):0)+'%';}});var next=document.getElementById('next-probe-countdown');if(next){var left=Math.max(0,Math.ceil((Number(next.dataset.expiresAt)-now)/1000));next.textContent=fmt(left);}}tick();setInterval(tick,1000);")
 	out.WriteString("</script>")
 	out.WriteString("</main></body></html>")
 	return out.Bytes()
@@ -736,6 +789,22 @@ func avgTTFTText(seconds float64) string {
 		return "—"
 	}
 	return fmt.Sprintf("%.2fs", seconds)
+}
+
+func uniqueStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	sort.Strings(values)
+	out := values[:0]
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || (len(out) > 0 && out[len(out)-1] == value) {
+			continue
+		}
+		out = append(out, value)
+	}
+	return out
 }
 
 func accountColor(authID string) string {
