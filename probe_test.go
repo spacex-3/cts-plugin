@@ -68,15 +68,18 @@ func TestProbeTargetRetriesRejectedStateLength(t *testing.T) {
 }
 
 func TestBuildProbeBodyUsesSmallStreamingRequest(t *testing.T) {
-	raw, errBuild := buildProbeBody("model-1", ".", 7)
+	raw, errBuild := buildProbeBody("model-1", ".")
 	if errBuild != nil {
 		t.Fatal(errBuild)
 	}
 	text := string(raw)
-	for _, want := range []string{`"model":"model-1"`, `"stream":true`, `"store":false`, `"max_output_tokens":7`} {
+	for _, want := range []string{`"model":"model-1"`, `"stream":true`, `"store":false`, `"parallel_tool_calls":true`, `"include":["reasoning.encrypted_content"]`} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("probe body %s does not contain %s", text, want)
 		}
+	}
+	if strings.Contains(text, `"max_output_tokens"`) {
+		t.Fatalf("probe body contains unsupported max_output_tokens: %s", text)
 	}
 }
 

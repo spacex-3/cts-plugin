@@ -1,14 +1,11 @@
-Add direct baseline comparison, complete per-attempt probe logs, and provider-style SOCKS5 proxy syntax support.
+Fix Codex probe requests that were rejected with `Unsupported parameter: max_output_tokens`.
 
-## New in v0.2.0
+## Fixed in v0.2.1
 
-- Accept `socks5://host:port:user:password` in addition to standard proxy URLs.
-- `direct_probe: true` records one no-proxy baseline for every auth/model before proxy attempts.
-- Every proxy attempt records timestamp, route, attempt number, state length, target match, cache result, and error.
-- `show_state_values: true` displays future full state values in the status page and JSON.
-- `probe_log_limit` bounds in-memory logs (default 200, maximum 1000).
-
-Direct baseline states are never inserted into the production injection cache. Proxy credentials and access tokens remain redacted.
+- Stop sending `max_output_tokens` to the native Codex Responses endpoint.
+- Match CPA's Codex request normalization by including `parallel_tool_calls` and `reasoning.encrypted_content`.
+- Keep `max_output_tokens` as an ignored compatibility setting so existing configurations continue to load.
+- Continue to support provider-style SOCKS5 syntax, direct baselines, and per-attempt state logs from v0.2.0.
 
 ## Install with CPA
 

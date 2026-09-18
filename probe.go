@@ -188,7 +188,7 @@ func (rt *pluginRuntime) probeTarget(ctx context.Context, proxyURL string, targe
 }
 
 func (rt *pluginRuntime) probeOnce(ctx context.Context, proxyURL string, target probeTarget, cfg pluginConfig) (string, error) {
-	body, errBody := buildProbeBody(target.Model, cfg.probePrompt(), cfg.maxOutputTokens())
+	body, errBody := buildProbeBody(target.Model, cfg.probePrompt())
 	if errBody != nil {
 		return "", errBody
 	}
@@ -321,13 +321,14 @@ func credentialFromAuthJSON(raw json.RawMessage) (token, accountID, baseURL stri
 	return strings.TrimSpace(token), strings.TrimSpace(accountID), strings.TrimSpace(baseURL)
 }
 
-func buildProbeBody(model, prompt string, maxOutputTokens int) ([]byte, error) {
+func buildProbeBody(model, prompt string) ([]byte, error) {
 	payload := map[string]any{
-		"model":             model,
-		"stream":            true,
-		"store":             false,
-		"instructions":      "",
-		"max_output_tokens": maxOutputTokens,
+		"model":               model,
+		"stream":              true,
+		"store":               false,
+		"instructions":        "",
+		"parallel_tool_calls": true,
+		"include":             []string{"reasoning.encrypted_content"},
 		"input": []map[string]any{{
 			"type": "message",
 			"role": "user",

@@ -56,7 +56,6 @@ plugins:
       show_state_values: true
       probe_log_limit: 200
       max_probe_attempts: 3
-      max_output_tokens: 16
       prompt: "."
 ```
 
@@ -75,7 +74,7 @@ plugins:
 - `show_state_values`: display and retain future full state values in the status page/JSON probe log. Default: `false`; enable only on a protected management endpoint.
 - `probe_log_limit`: maximum in-memory attempt records. Default: `200`, maximum: `1000`.
 - `max_probe_attempts`: attempts per auth/model in one cycle. Default: `3`.
-- `max_output_tokens`: probe output limit. Default: `16`.
+- `max_output_tokens`: deprecated compatibility field. It is ignored because Codex upstream rejects token-limit parameters.
 - `prompt`: minimal probe input. Default: `.`.
 
 When `probe` is enabled, `proxy` must be configured. A wrong-length state consumes an attempt and is not cached.

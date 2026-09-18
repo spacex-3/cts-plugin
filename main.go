@@ -223,7 +223,7 @@ func pluginRegistration() registration {
 				{Name: "show_state_values", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Display future full state values in the status page and JSON. Default false."},
 				{Name: "probe_log_limit", Type: pluginapi.ConfigFieldTypeInteger, Description: "Maximum in-memory probe log entries. Default 200, maximum 1000."},
 				{Name: "max_probe_attempts", Type: pluginapi.ConfigFieldTypeInteger, Description: "Probe attempts per account+model in one cycle. Default 3."},
-				{Name: "max_output_tokens", Type: pluginapi.ConfigFieldTypeInteger, Description: "Maximum output tokens requested by a probe. Default 16."},
+				{Name: "max_output_tokens", Type: pluginapi.ConfigFieldTypeInteger, Description: "Deprecated and ignored; Codex upstream rejects token limit fields."},
 				{Name: "prompt", Type: pluginapi.ConfigFieldTypeString, Description: "Minimal prompt sent by each probe. Default is a single period."},
 			},
 		},

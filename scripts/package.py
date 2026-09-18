@@ -8,7 +8,7 @@ import zipfile
 
 root = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser()
-parser.add_argument('--version', default='0.2.0')
+parser.add_argument('--version', default='0.2.1')
 parser.add_argument('--goos', default={'Darwin': 'darwin', 'Windows': 'windows'}.get(platform.system(), 'linux'))
 parser.add_argument('--goarch', default={'x86_64': 'amd64', 'AMD64': 'amd64', 'aarch64': 'arm64', 'arm64': 'arm64'}.get(platform.machine(), platform.machine()))
 parser.add_argument('--library', type=Path)

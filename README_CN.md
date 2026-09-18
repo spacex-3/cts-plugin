@@ -56,7 +56,6 @@ plugins:
       show_state_values: true
       probe_log_limit: 200
       max_probe_attempts: 3
-      max_output_tokens: 16
       prompt: "."
 ```
 
@@ -75,7 +74,7 @@ plugins:
 - `show_state_values`：在状态页和 JSON 日志中保留并显示之后捕获到的完整 state。默认 `false`；只应在受保护的管理入口启用。
 - `probe_log_limit`：内存中保留的探测日志条数。默认 `200`，最大 `1000`。
 - `max_probe_attempts`：每轮中每个账号+模型最多尝试次数。默认 `3`。
-- `max_output_tokens`：探测请求的最大输出 token。默认 `16`。
+- `max_output_tokens`：已弃用的兼容配置。Codex 上游拒绝 token 限制参数，因此插件会忽略该项。
 - `prompt`：最小探测输入。默认 `.`。
 
 启用 `probe` 时必须配置 `proxy`。长度不符合要求的 state 会消耗一次尝试，但不会写入缓存。
