@@ -213,3 +213,7 @@ Probe quota failures stop the current attempt loop; transient probe failures use
 the remaining `max_probe_attempts`. Backoff is in memory and resets on process
 restart. Refreshing state cannot restore account quota. `rotate_proxy_start`
 advances the pool's starting proxy once per proxy-probe round.
+
+The public login shell first reads the host management key from
+`localStorage["cli-proxy-auth"]` for automatic sign-in; it only reads that value,
+never writes it back, and falls back to manual entry on failure.

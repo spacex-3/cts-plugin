@@ -141,4 +141,7 @@ window.ctsFetch=function(path,options){
 window.ctsReload=function(){var current=generation;return window.ctsFetch(endpoint).then(function(r){return r.text();}).then(function(page){if(current!==generation)return;frame.srcdoc=page;frame.hidden=false;form.hidden=true;logout.hidden=false;message.textContent='已登录；数据由 CPA 管理接口保护。';});};
 form.addEventListener('submit',function(e){e.preventDefault();key=input.value.trim();input.value='';generation++;window.ctsReload().catch(function(){message.textContent='登录失败。请检查管理密钥、管理接口和远程访问设置。';});});
 logout.addEventListener('click',function(){clear();message.textContent='已退出。';});
+function hostedKey(raw){if(!raw)return '';var v=raw;try{v=JSON.parse(raw);}catch(e){}if(typeof v!=='string'){v=v&&(v.managementKey||v.management_key||v.apiKey||v.api_key||v.token||v.key||v.Authorization)||'';}v=String(v||'').trim();if(/^Bearer\s+/i.test(v))v=v.replace(/^Bearer\s+/i,'');return v;}
+function tryHostedLogin(){var found=hostedKey(window.localStorage&&localStorage.getItem('cli-proxy-auth'));if(!found){return false;}key=found;generation++;window.ctsReload().then(function(){input.value='';}).catch(function(){key='';form.hidden=false;logout.hidden=true;message.textContent='自动登录失败，请手动输入 CPA 管理密钥。';});return true;}
+if(!tryHostedLogin()){form.hidden=false;}
 })();</script></body></html>`

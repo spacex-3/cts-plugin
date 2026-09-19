@@ -173,7 +173,7 @@ func TestProtectedMutationsRequirePostAndResolveAccountAliases(t *testing.T) {
 }
 
 func TestStatusLoginAndActionsKeepSecretsOutOfURLs(t *testing.T) {
-	for _, bad := range []string{"localStorage", "sessionStorage", "?key=", "?token=", "&state=", "&proxy_lines="} {
+	for _, bad := range []string{"localStorage.setItem", "sessionStorage.setItem", "?key=", "?token=", "&state=", "&proxy_lines="} {
 		if strings.Contains(statusLoginPage, bad) || strings.Contains(string(renderStatusPage(statusView{}, false)), bad) {
 			t.Fatalf("unsafe UI storage/query: %s", bad)
 		}
