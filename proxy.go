@@ -136,3 +136,15 @@ func redactProxyURL(proxyURL string) string {
 	}
 	return proxyutil.Redact(setting.URL.String())
 }
+
+func redactProxyUser(proxyURL string) string {
+	setting, errParse := proxyutil.Parse(strings.TrimSpace(proxyURL))
+	if errParse != nil || setting.URL == nil {
+		return "(invalid)"
+	}
+	username := setting.URL.User.Username()
+	if username == "" {
+		return proxyutil.Redact(setting.URL.String())
+	}
+	return setting.URL.Scheme + "://" + username + "@[redacted]"
+}

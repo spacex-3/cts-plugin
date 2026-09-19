@@ -104,6 +104,16 @@ func TestParseProxyURLsReportsLineNumber(t *testing.T) {
 	}
 }
 
+func TestRedactProxyUserShowsUsernameButHidesHostAndPassword(t *testing.T) {
+	got := redactProxyUser("socks5://USER-zone-custom-region-US:p%40ss@us.rrp.bestgo.work:10000")
+	if got != "socks5://USER-zone-custom-region-US@[redacted]" {
+		t.Fatalf("redacted proxy user = %q", got)
+	}
+	if strings.Contains(got, "p%40ss") || strings.Contains(got, "us.rrp.bestgo.work") {
+		t.Fatalf("redacted proxy leaked password or host: %q", got)
+	}
+}
+
 func TestParseProxyURLsUsesDefaultScheme(t *testing.T) {
 	got, errParse := parseProxyURLsWithScheme("us.rrp.bestgo.work:10000:user:pw\nproxy-two.example:1080:user:pw", "socks5")
 	if errParse != nil {

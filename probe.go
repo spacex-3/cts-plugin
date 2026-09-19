@@ -274,7 +274,7 @@ func (rt *pluginRuntime) probeTargetWithProxies(ctx context.Context, proxies []s
 		}
 		proxyIndex := (start + attempt - 1) % len(proxies)
 		proxyURL := proxies[proxyIndex]
-		proxyLabel := redactProxyURL(proxyURL)
+		proxyLabel := redactProxyUser(proxyURL)
 		state, errProbe := rt.probeOnce(ctx, proxyURL, target, cfg)
 		if errProbe != nil {
 			lastErr = errProbe
