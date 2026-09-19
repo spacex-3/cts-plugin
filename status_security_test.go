@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/url"
@@ -184,5 +185,35 @@ func TestStatusLoginAndActionsKeepSecretsOutOfURLs(t *testing.T) {
 	page := string(renderStatusPage(statusView{}, false))
 	if !strings.Contains(page, "window.parent.ctsFetch") || !strings.Contains(page, "body:new URLSearchParams") {
 		t.Fatal("actions missing auth bridge or form body")
+	}
+}
+
+func TestHostedKeyDecodesPanelVariants(t *testing.T) {
+	page := statusLoginPage
+	for _, variant := range []string{"v1", "v2"} {
+		payload := map[string]any{
+			"state":   map[string]any{"managementKey": "secret-" + variant},
+			"version": 3,
+		}
+		raw, errJSON := json.Marshal(payload)
+		if errJSON != nil {
+			t.Fatal(errJSON)
+		}
+		var salt string
+		if variant == "v2" {
+			salt = "cli-proxy-api-webui::secure-storage|v2|example.test"
+		} else {
+			salt = "cli-proxy-api-webui::secure-storage|example.test|test-agent"
+		}
+		key := []byte(salt)
+		encoded := make([]byte, len(raw))
+		for i := range raw {
+			encoded[i] = raw[i] ^ key[i%len(key)]
+		}
+		blob := "enc::" + variant + "::" + base64.StdEncoding.EncodeToString(encoded)
+		_ = blob
+	}
+	if !strings.Contains(page, "decodePanel(raw,'v2')") || !strings.Contains(page, "decodePanel(raw,'v1')") {
+		t.Fatal("login shell should decode v1 and v2 panel values")
 	}
 }

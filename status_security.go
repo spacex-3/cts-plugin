@@ -141,7 +141,26 @@ window.ctsFetch=function(path,options){
 window.ctsReload=function(){var current=generation;return window.ctsFetch(endpoint).then(function(r){return r.text();}).then(function(page){if(current!==generation)return;frame.srcdoc=page;frame.hidden=false;form.hidden=true;logout.hidden=false;message.textContent='已登录；数据由 CPA 管理接口保护。';});};
 form.addEventListener('submit',function(e){e.preventDefault();key=input.value.trim();input.value='';generation++;window.ctsReload().catch(function(){message.textContent='登录失败。请检查管理密钥、管理接口和远程访问设置。';});});
 logout.addEventListener('click',function(){clear();message.textContent='已退出。';});
-function hostedKey(raw){if(!raw)return '';var v=raw;try{v=JSON.parse(raw);}catch(e){}if(typeof v!=='string'){v=v&&(v.managementKey||v.management_key||v.apiKey||v.api_key||v.token||v.key||v.Authorization)||'';}v=String(v||'').trim();if(/^Bearer\s+/i.test(v))v=v.replace(/^Bearer\s+/i,'');return v;}
+function decodePanel(raw, variant){
+ var prefix='enc::'+variant+'::';
+ if(!raw||raw.indexOf(prefix)!==0)return null;
+ var salt=variant==='v2'?'cli-proxy-api-webui::secure-storage|v2|'+location.host:'cli-proxy-api-webui::secure-storage|'+location.host+'|'+navigator.userAgent;
+ var key=new TextEncoder().encode(salt);
+ var bin=atob(raw.slice(prefix.length));
+ var bytes=new Uint8Array(bin.length);
+ for(var i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i)^key[i%key.length];
+ try{return JSON.parse(new TextDecoder().decode(bytes));}catch(e){return null;}
+}
+function hostedKey(){
+ var raw=null;try{raw=window.localStorage&&localStorage.getItem('cli-proxy-auth');}catch(e){}
+ if(!raw)return '';
+ var obj=null;
+ if(raw.charAt(0)==='{'){try{obj=JSON.parse(raw);}catch(e){}}
+ if(!obj)obj=decodePanel(raw,'v2')||decodePanel(raw,'v1');
+ if(!obj)return '';
+ var v=obj.state?obj.state.managementKey:(obj.managementKey||obj.management_key||obj.apiKey||obj.api_key||obj.token||obj.key);
+ return typeof v==='string'?v.trim().replace(/^Bearer\s+/i,''):'';
+}
 function tryHostedLogin(){var found=hostedKey(window.localStorage&&localStorage.getItem('cli-proxy-auth'));if(!found){return false;}key=found;generation++;window.ctsReload().then(function(){input.value='';}).catch(function(){key='';form.hidden=false;logout.hidden=true;message.textContent='自动登录失败，请手动输入 CPA 管理密钥。';});return true;}
 if(!tryHostedLogin()){form.hidden=false;}
 })();</script></body></html>`
