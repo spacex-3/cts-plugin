@@ -225,6 +225,7 @@ func pluginRegistration() registration {
 				{Name: "models", Type: pluginapi.ConfigFieldTypeArray, Description: "需要探测和注入的模型。默认 gpt-5.6-sol 和 gpt-6-astra。"},
 				{Name: "interval_seconds", Type: pluginapi.ConfigFieldTypeInteger, Description: "自动探测间隔（秒）。默认 1800，即 30 分钟。"},
 				{Name: "target_state_length", Type: pluginapi.ConfigFieldTypeInteger, Description: "接受的 x-codex-turn-state 长度。默认 292。"},
+				{Name: "accepted_blocks", Type: pluginapi.ConfigFieldTypeArray, Description: "按 Fernet 密文块数接受的 state 类型，默认 [10,12]：10 为 Pro/Plus（292），12 为 Team（332）。空数组回退默认值。"},
 				{Name: "ttl_seconds", Type: pluginapi.ConfigFieldTypeInteger, Description: "已缓存 state 的有效期（秒）。默认 3600，即约 1 小时。"},
 				{Name: "inject", Type: pluginapi.ConfigFieldTypeBoolean, Description: "把缓存的 turn state 注入后续 Codex 生产请求，用于保持不降智。默认开启。"},
 				{Name: "harvest", Type: pluginapi.ConfigFieldTypeBoolean, Description: "从正常 CPA Codex 流量中采集命中目标长度的 state。默认开启。"},

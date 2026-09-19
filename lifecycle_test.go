@@ -77,6 +77,31 @@ func TestFernetFreshnessAndValidation(t *testing.T) {
 	}
 }
 
+func TestAcceptedBlocksCoversProAndTeam(t *testing.T) {
+	now := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
+	pro := syntheticState(now)
+	raw := make([]byte, 57+192)
+	raw[0] = 0x80
+	binary.BigEndian.PutUint64(raw[1:9], uint64(now.Unix()))
+	teamState := base64.URLEncoding.EncodeToString(raw)
+
+	cache := newStateCache(time.Hour, 292, func() time.Time { return now })
+	if !cache.putIfTarget("a", "pro", pro, "probe") {
+		t.Fatal("Pro 10-block state should be accepted by default")
+	}
+	if !cache.putIfTarget("a", "team", teamState, "probe") {
+		t.Fatal("Team 12-block state should be accepted by default")
+	}
+
+	anomaly := make([]byte, 57+176)
+	anomaly[0] = 0x80
+	binary.BigEndian.PutUint64(anomaly[1:9], uint64(now.Unix()))
+	anomalyState := base64.URLEncoding.EncodeToString(anomaly)
+	if cache.putIfTarget("a", "bad", anomalyState, "probe") {
+		t.Fatal("11-block anomaly should be rejected")
+	}
+}
+
 func TestRestorePreservesAgeForProbeAndManual(t *testing.T) {
 	now := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
 	for _, source := range []string{"probe", "manual"} {

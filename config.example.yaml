@@ -32,6 +32,7 @@ plugins:
       quota_backoff_seconds: 900
       rotate_proxy_start: false
       target_state_length: 292
+      accepted_blocks: [10, 12]
       ttl_seconds: 3600
       inject: true
       harvest: true

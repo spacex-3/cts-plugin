@@ -160,9 +160,9 @@ func (r *pluginRuntime) applyConfig(cfg pluginConfig) error {
 	r.harvestPending = make(map[harvestKey]*harvestCandidate)
 	if r.cache == nil {
 		r.cache = newStateCache(cfg.ttl(), cfg.targetLength(), nowFunc)
-	} else {
-		r.cache.reconfigure(cfg.ttl(), cfg.targetLength(), nowFunc)
 	}
+	r.cache.configureAcceptedBlocks(cfg.acceptedBlocks())
+	r.cache.reconfigure(cfg.ttl(), cfg.targetLength(), nowFunc)
 	r.cache.configureIssuedAt(cfg.UseIssuedAt)
 	if r.statuses == nil {
 		r.statuses = make(map[cacheKey]probeRecord)

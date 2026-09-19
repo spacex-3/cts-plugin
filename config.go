@@ -28,7 +28,7 @@ const (
 )
 
 var (
-	pluginVersion      = "0.4.0"
+	pluginVersion      = "0.4.1"
 	defaultProbeModels = []string{"gpt-5.6-sol", "gpt-6-astra"}
 )
 
@@ -41,6 +41,7 @@ type pluginConfig struct {
 	Models                  []string `yaml:"models"`
 	IntervalSeconds         int      `yaml:"interval_seconds"`
 	TargetStateLength       int      `yaml:"target_state_length"`
+	AcceptedBlocks          []int    `yaml:"accepted_blocks"`
 	TTLSeconds              int      `yaml:"ttl_seconds"`
 	Inject                  *bool    `yaml:"inject"`
 	Harvest                 *bool    `yaml:"harvest"`
@@ -114,6 +115,30 @@ func (c pluginConfig) targetLength() int {
 		return defaultTargetStateLength
 	}
 	return c.TargetStateLength
+}
+
+func (c pluginConfig) acceptedBlocks() []int {
+	if len(c.AcceptedBlocks) == 0 {
+		return []int{10, 12}
+	}
+	out := make([]int, 0, len(c.AcceptedBlocks))
+	for _, block := range c.AcceptedBlocks {
+		if block > 0 {
+			out = append(out, block)
+		}
+	}
+	if len(out) == 0 {
+		return []int{10, 12}
+	}
+	return out
+}
+
+func (c pluginConfig) stateAccepted(state string) bool {
+	blocks, okBlocks := parseStateBlocks(state)
+	if okBlocks {
+		return containsInt(c.acceptedBlocks(), blocks)
+	}
+	return c.targetLength() > 0 && len(strings.TrimSpace(state)) == c.targetLength()
 }
 
 func (c pluginConfig) maxAttempts() int {
@@ -237,7 +262,17 @@ func clonePluginConfig(cfg pluginConfig) pluginConfig {
 	cfg.ProbeAuthIDs = append([]string(nil), cfg.ProbeAuthIDs...)
 	cfg.Models = append([]string(nil), cfg.Models...)
 	cfg.Proxies = append([]string(nil), cfg.Proxies...)
+	cfg.AcceptedBlocks = append([]int(nil), cfg.AcceptedBlocks...)
 	return cfg
+}
+
+func containsInt(values []int, target int) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func containsFold(values []string, target string) bool {

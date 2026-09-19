@@ -75,6 +75,7 @@ plugins:
 - `probe_schedule`：探测调度方式。`fixed` 为固定间隔；`state_aware` 在已持有新鲜 state 时跳过周期探测，等接近过期再续期。默认 `fixed`。
 - `probe_lead_seconds`：`state_aware` 模式下，在 state 过期前提前多少秒开始探测。默认 `300`。
 - `target_state_length`：只缓存指定长度的 state。默认 `292`。
+- `accepted_blocks`：按 Fernet 密文块数接受的 state 类型。默认 `[10, 12]`：`10` 对应 Pro/Plus（292），`12` 对应 Team（332）；`11`/`13` 等异常态拒绝。合法 Fernet 优先按块数判断，非 Fernet 退回 `target_state_length`。
 - `ttl_seconds`：缓存可用于注入的最长时间。默认 `3600`。
 - `inject`：向后续匹配请求注入缓存。默认 `true`。
 - `harvest`：从正常 Codex 流量采集。默认 `true`。

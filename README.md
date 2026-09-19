@@ -75,6 +75,7 @@ plugins:
 - `probe_schedule`: `fixed` probes on a constant interval; `state_aware` skips periodic probes while a fresh state is cached and only resumes shortly before expiry. Default: `fixed`.
 - `probe_lead_seconds`: lead time before state expiry used by `state_aware`. Default: `300`.
 - `target_state_length`: required state length. Default: `292`.
+- `accepted_blocks`: accepted Fernet ciphertext block counts. Default: `[10, 12]`; `10` covers Pro/Plus (292) and `12` covers Team (332). Anomalous `11`/`13` blocks are rejected. Valid Fernet states use block count first; non-Fernet states fall back to `target_state_length`.
 - `ttl_seconds`: maximum cache age for injection. Default: `3600`.
 - `inject`: inject fresh cached state into matching requests. Default: `true`.
 - `harvest`: collect matching state from normal Codex traffic. Default: `true`.

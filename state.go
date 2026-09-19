@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -35,12 +36,13 @@ type probeRecord struct {
 }
 
 type stateCache struct {
-	mu           sync.Mutex
-	entries      map[cacheKey]cacheEntry
-	ttl          time.Duration
-	targetLength int
-	useIssuedAt  bool
-	nowFunc      func() time.Time
+	mu             sync.Mutex
+	entries        map[cacheKey]cacheEntry
+	ttl            time.Duration
+	targetLength   int
+	acceptedBlocks []int
+	useIssuedAt    bool
+	nowFunc        func() time.Time
 }
 
 func newStateCache(ttl time.Duration, targetLength int, nowFunc func() time.Time) *stateCache {
@@ -55,6 +57,29 @@ func newStateCache(ttl time.Duration, targetLength int, nowFunc func() time.Time
 	}
 }
 
+func (c *stateCache) configureAcceptedBlocks(blocks []int) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.acceptedBlocks = append([]int(nil), blocks...)
+}
+
+func acceptedState(state string, targetLength int, acceptedBlocks []int, fallbackLength bool) bool {
+	if len(acceptedBlocks) == 0 {
+		acceptedBlocks = []int{10, 12}
+	}
+	blocks, okBlocks := parseStateBlocks(state)
+	if okBlocks {
+		return containsInt(acceptedBlocks, blocks)
+	}
+	if fallbackLength {
+		return targetLength > 0 && len(strings.TrimSpace(state)) == targetLength
+	}
+	return false
+}
+
 func (c *stateCache) reconfigure(ttl time.Duration, targetLength int, nowFunc func() time.Time) {
 	if c == nil {
 		return
@@ -67,7 +92,7 @@ func (c *stateCache) reconfigure(ttl time.Duration, targetLength int, nowFunc fu
 		c.nowFunc = nowFunc
 	}
 	for key, entry := range c.entries {
-		if targetLength > 0 && entry.Length != targetLength {
+		if !acceptedState(entry.State, targetLength, c.acceptedBlocks, true) {
 			delete(c.entries, key)
 		}
 	}
@@ -100,7 +125,7 @@ func (c *stateCache) storeTarget(authID, model, state, source string, refresh bo
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	now := c.nowLocked()
-	if len(state) != c.targetLength {
+	if !acceptedState(state, c.targetLength, c.acceptedBlocks, true) {
 		return cacheEntry{}, false, false
 	}
 	var issuedAt time.Time
@@ -155,6 +180,9 @@ func (c *stateCache) putManual(authID, model, state string) (cacheEntry, bool) {
 		Length:   len(state),
 		StoredAt: c.nowLocked(),
 		Source:   "manual",
+	}
+	if blocks, okBlocks := parseStateBlocks(state); okBlocks && !containsInt(normalizedBlocks(c.acceptedBlocks), blocks) {
+		return cacheEntry{}, false
 	}
 	if c.useIssuedAt {
 		issuedAt, err := parseStateIssuedAt(state)
@@ -242,22 +270,46 @@ func makeCacheKey(authID, model string) cacheKey {
 	return cacheKey{AuthID: strings.TrimSpace(authID), Model: strings.TrimSpace(model)}
 }
 
+func normalizedBlocks(blocks []int) []int {
+	if len(blocks) == 0 {
+		return []int{10, 12}
+	}
+	return blocks
+}
+
 // Fernet's timestamp is public envelope metadata, not an authenticated claim:
 // this parser neither decrypts the state nor verifies its HMAC.
 func parseStateIssuedAt(state string) (time.Time, error) {
+	issuedAt, _, errParse := parseStateEnvelope(state)
+	return issuedAt, errParse
+}
+
+func parseStateBlocks(state string) (int, bool) {
+	_, blocks, errParse := parseStateEnvelope(state)
+	return blocks, errParse == nil
+}
+
+func stateBlocksText(state string) string {
+	if blocks, okBlocks := parseStateBlocks(state); okBlocks {
+		return strconv.Itoa(blocks)
+	}
+	return "unknown"
+}
+
+func parseStateEnvelope(state string) (time.Time, int, error) {
 	raw, err := base64.URLEncoding.DecodeString(strings.TrimSpace(state))
 	if err != nil {
 		raw, err = base64.RawURLEncoding.DecodeString(strings.TrimSpace(state))
 	}
 	// Version + timestamp + IV + at least one AES block + HMAC.
 	if err != nil || len(raw) < 73 || raw[0] != 0x80 || (len(raw)-57)%16 != 0 {
-		return time.Time{}, fmt.Errorf("invalid Fernet envelope")
+		return time.Time{}, 0, fmt.Errorf("invalid Fernet envelope")
 	}
 	stamp := binary.BigEndian.Uint64(raw[1:9])
 	if stamp == 0 || stamp > 1<<63-1 {
-		return time.Time{}, fmt.Errorf("invalid Fernet timestamp")
+		return time.Time{}, 0, fmt.Errorf("invalid Fernet timestamp")
 	}
-	return time.Unix(int64(stamp), 0).UTC(), nil
+	return time.Unix(int64(stamp), 0).UTC(), (len(raw) - 57) / 16, nil
 }
 
 func (e cacheEntry) freshnessTime() time.Time {
@@ -295,7 +347,10 @@ func (c *stateCache) restore(entry cacheEntry) {
 		return
 	}
 	entry.Length = len(entry.State)
-	if entry.Source != "manual" && entry.Length != c.targetLength {
+	if entry.Source != "manual" && !acceptedState(entry.State, c.targetLength, c.acceptedBlocks, true) {
+		return
+	}
+	if blocks, okBlocks := parseStateBlocks(entry.State); okBlocks && !containsInt(normalizedBlocks(c.acceptedBlocks), blocks) {
 		return
 	}
 	entry.IssuedAt = time.Time{}

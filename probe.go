@@ -212,10 +212,10 @@ func (rt *pluginRuntime) probeDirectBaseline(ctx context.Context, target probeTa
 		})
 		return
 	}
-	targetMatch := len(strings.TrimSpace(state)) == cfg.targetLength()
+	targetMatch := cfg.stateAccepted(state)
 	errText := ""
 	if !targetMatch {
-		errText = fmt.Sprintf("turn state length %d does not match target %d", len(strings.TrimSpace(state)), cfg.targetLength())
+		errText = fmt.Sprintf("turn state rejected (length %d, blocks %s)", len(strings.TrimSpace(state)), stateBlocksText(state))
 	}
 	rt.recordProbeAttempt(target, "direct", 0, state, targetMatch, false, errText)
 	if targetMatch {
@@ -229,10 +229,10 @@ func (rt *pluginRuntime) probeTargetOnce(ctx context.Context, target probeTarget
 	}
 	if cfg.directProbeEnabled() {
 		if state, errProbe := rt.probeOnce(ctx, "", target, cfg); errProbe == nil {
-			targetMatch := len(strings.TrimSpace(state)) == cfg.targetLength()
+			targetMatch := cfg.stateAccepted(state)
 			errText := ""
 			if !targetMatch {
-				errText = fmt.Sprintf("turn state length %d does not match target %d", len(strings.TrimSpace(state)), cfg.targetLength())
+				errText = fmt.Sprintf("turn state rejected (length %d, blocks %s)", len(strings.TrimSpace(state)), stateBlocksText(state))
 			}
 			rt.recordProbeAttempt(target, "direct", 0, state, targetMatch, false, errText)
 			if targetMatch {
@@ -297,14 +297,14 @@ func (rt *pluginRuntime) probeTargetWithProxies(ctx context.Context, proxies []s
 			})
 			return
 		}
-		lastErr = fmt.Errorf("turn state rejected (length %d, target %d): invalid or expired state, or length mismatch", len(strings.TrimSpace(state)), cfg.targetLength())
+		lastErr = fmt.Errorf("turn state rejected (length %d, blocks %s)", len(strings.TrimSpace(state)), stateBlocksText(state))
 		rt.recordProbeAttemptWithProxy(target, "proxy", proxyLabel, attempt, state, false, false, lastErr.Error())
 		rt.recordProbe(target, state, false, lastErr.Error())
 		rt.host.Log("info", "codex-turn-state: probe turn state rejected", map[string]any{
 			"auth_id":     target.AuthID,
 			"model":       target.Model,
 			"length":      len(strings.TrimSpace(state)),
-			"target":      cfg.targetLength(),
+			"blocks":      stateBlocksText(state),
 			"attempt":     attempt,
 			"proxy_index": proxyIndex + 1,
 		})
