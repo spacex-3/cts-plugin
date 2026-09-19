@@ -28,7 +28,7 @@ const (
 )
 
 var (
-	pluginVersion      = "0.4.4"
+	pluginVersion      = "0.4.5"
 	defaultProbeModels = []string{"gpt-5.6-sol", "gpt-6-astra"}
 )
 
@@ -54,6 +54,7 @@ type pluginConfig struct {
 	ProbeLeadSeconds        int      `yaml:"probe_lead_seconds"`
 	ProbeWaitMilliseconds   int      `yaml:"probe_wait_milliseconds"`
 	ProbeTimeoutSeconds     int      `yaml:"probe_timeout_seconds"`
+	OnDemandCooldownSeconds int      `yaml:"on_demand_cooldown_seconds"`
 	UseIssuedAt             bool     `yaml:"use_issued_at"`
 	RequireCompleted        bool     `yaml:"require_completed"`
 	ErrorAwareBackoff       bool     `yaml:"error_aware_backoff"`
@@ -378,6 +379,13 @@ func (c pluginConfig) probeTimeout() time.Duration {
 		return 60 * time.Second
 	}
 	return time.Duration(c.ProbeTimeoutSeconds) * time.Second
+}
+
+func (c pluginConfig) onDemandCooldown() time.Duration {
+	if c.OnDemandCooldownSeconds <= 0 {
+		return 600 * time.Second
+	}
+	return time.Duration(c.OnDemandCooldownSeconds) * time.Second
 }
 
 func (c pluginConfig) quotaBackoff() time.Duration {

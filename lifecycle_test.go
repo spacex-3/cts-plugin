@@ -366,6 +366,42 @@ func TestQuotaStopsProbeAttemptsAndRotatingProxyStart(t *testing.T) {
 	}
 }
 
+func TestOnDemandMissRoundCooldown(t *testing.T) {
+	now := time.Date(2026, 9, 19, 12, 0, 0, 0, time.UTC)
+	r := isolatedRuntime(t, pluginConfig{ProbeSchedule: "on_demand", OnDemandCooldownSeconds: 600, Models: []string{"m"}})
+	r.nowFunc = func() time.Time { return now }
+	key := makeCacheKey("a", "m")
+	cfg := r.configSnapshot()
+
+	if r.probeCooldownBlocked(key, cfg) {
+		t.Fatal("no cooldown initially")
+	}
+	r.recordProbeMissRound(key, cfg)
+	r.recordProbeMissRound(key, cfg)
+	if r.probeCooldownBlocked(key, cfg) {
+		t.Fatal("cooldown triggered too early")
+	}
+	r.recordProbeMissRound(key, cfg)
+	if !r.probeCooldownBlocked(key, cfg) {
+		t.Fatal("third miss should trigger cooldown")
+	}
+
+	now = now.Add(599 * time.Second)
+	if !r.probeCooldownBlocked(key, r.configSnapshot()) {
+		t.Fatal("cooldown should still be active before expiry")
+	}
+	now = now.Add(2 * time.Second)
+	if r.probeCooldownBlocked(key, r.configSnapshot()) {
+		t.Fatal("cooldown should expire after 600 seconds")
+	}
+
+	r.recordProbeMissRound(key, r.configSnapshot())
+	r.resetProbeMiss(key)
+	if r.probeCooldownBlocked(key, r.configSnapshot()) {
+		t.Fatal("reset should clear cooldown")
+	}
+}
+
 type countFailureTransport struct{ calls int }
 
 func (c *countFailureTransport) Do(context.Context, string, *http.Request) (*http.Response, error) {

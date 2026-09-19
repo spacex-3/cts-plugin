@@ -15,7 +15,7 @@ type demandProbe struct {
 // All network work stays on the lifecycle worker. Concurrent requests for the
 // same bucket share a completion channel and only wait up to their own budget.
 func (r *pluginRuntime) ensureDemandProbe(key cacheKey, cfg pluginConfig) {
-	if cfg.probeSchedule() != "on_demand" || !cfg.probeEnabled() || !cfg.probeAuthEnabled(key.AuthID) || r.freshForProbe(key, cfg) || r.quotaBlocked(key.AuthID, cfg) {
+	if cfg.probeSchedule() != "on_demand" || !cfg.probeEnabled() || !cfg.probeAuthEnabled(key.AuthID) || r.freshForProbe(key, cfg) || r.quotaBlocked(key.AuthID, cfg) || r.probeCooldownBlocked(key, cfg) {
 		return
 	}
 	r.mu.Lock()
@@ -62,6 +62,9 @@ func (r *pluginRuntime) runDemandProbe(ctx context.Context, job demandProbe) {
 	if r.freshForProbe(job.key, cfg) {
 		return
 	}
+	if r.probeCooldownBlocked(job.key, cfg) {
+		return
+	}
 	probeCtx, cancel := context.WithTimeout(ctx, cfg.probeTimeout())
 	defer cancel()
 	r.probeKey(probeCtx, job.key)
@@ -78,7 +81,39 @@ const (
 	failureOther failureKind = iota
 	failureTransient
 	failureQuota
+	onDemandMissRounds = 3
 )
+
+func (r *pluginRuntime) probeCooldownBlocked(key cacheKey, cfg pluginConfig) bool {
+	if cfg.probeSchedule() != "on_demand" {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.now().Before(r.probeCooldownUntil[key])
+}
+
+func (r *pluginRuntime) recordProbeMissRound(key cacheKey, cfg pluginConfig) {
+	if cfg.probeSchedule() != "on_demand" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	rounds := r.probeMissRounds[key] + 1
+	if rounds >= onDemandMissRounds {
+		r.probeMissRounds[key] = 0
+		r.probeCooldownUntil[key] = r.now().Add(cfg.onDemandCooldown())
+		return
+	}
+	r.probeMissRounds[key] = rounds
+}
+
+func (r *pluginRuntime) resetProbeMiss(key cacheKey) {
+	r.mu.Lock()
+	delete(r.probeMissRounds, key)
+	delete(r.probeCooldownUntil, key)
+	r.mu.Unlock()
+}
 
 func classifyFailure(status int, body string) failureKind {
 	body = strings.ToLower(body)

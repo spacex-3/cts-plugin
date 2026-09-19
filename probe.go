@@ -110,7 +110,8 @@ func (rt *pluginRuntime) triggerProbe() {
 }
 
 func (rt *pluginRuntime) triggerTargetProbe(key cacheKey) bool {
-	if rt == nil || key.AuthID == "" || key.Model == "" || !rt.configSnapshot().probeEnabled() || rt.quotaBlocked(key.AuthID, rt.configSnapshot()) {
+	cfg := rt.configSnapshot()
+	if rt == nil || key.AuthID == "" || key.Model == "" || !cfg.probeEnabled() || rt.quotaBlocked(key.AuthID, cfg) || rt.probeCooldownBlocked(key, cfg) {
 		return false
 	}
 	select {
@@ -224,6 +225,9 @@ func (rt *pluginRuntime) probeDirectBaseline(ctx context.Context, target probeTa
 }
 
 func (rt *pluginRuntime) probeTargetOnce(ctx context.Context, target probeTarget, cfg pluginConfig, proxies []string) {
+	if rt.probeCooldownBlocked(makeCacheKey(target.AuthID, target.Model), cfg) {
+		return
+	}
 	if rt.quotaBlocked(target.AuthID, cfg) {
 		return
 	}
@@ -237,6 +241,7 @@ func (rt *pluginRuntime) probeTargetOnce(ctx context.Context, target probeTarget
 			rt.recordProbeAttempt(target, "direct", 0, state, targetMatch, false, errText)
 			if targetMatch {
 				if rt.observeState(target.AuthID, target.Model, state, "direct") {
+					rt.resetProbeMiss(makeCacheKey(target.AuthID, target.Model))
 					return
 				}
 			}
@@ -289,6 +294,7 @@ func (rt *pluginRuntime) probeTargetWithProxies(ctx context.Context, proxies []s
 		if accepted {
 			rt.recordProbeAttemptWithProxy(target, "proxy", proxyLabel, attempt, state, true, true, "")
 			rt.recordProbe(target, state, true, "")
+			rt.resetProbeMiss(makeCacheKey(target.AuthID, target.Model))
 			rt.host.Log("info", "codex-turn-state: captured target turn state", map[string]any{
 				"auth_id":     target.AuthID,
 				"model":       target.Model,
@@ -310,6 +316,7 @@ func (rt *pluginRuntime) probeTargetWithProxies(ctx context.Context, proxies []s
 		})
 	}
 	if lastErr != nil {
+		rt.recordProbeMissRound(makeCacheKey(target.AuthID, target.Model), cfg)
 		rt.host.Log("warn", "codex-turn-state: probe failed", map[string]any{
 			"auth_id": target.AuthID,
 			"model":   target.Model,

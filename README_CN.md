@@ -192,6 +192,7 @@ macOS 使用 `.dylib`，Linux 使用 `.so`，Windows 使用 `.dll`。推送 `v*`
 probe_schedule: on_demand
 probe_wait_milliseconds: 1500
 probe_timeout_seconds: 60
+on_demand_cooldown_seconds: 600
 use_issued_at: true
 require_completed: true
 error_aware_backoff: true
@@ -205,6 +206,11 @@ state 或进入 `probe_lead_seconds`（默认 300 秒）续期窗口时排队探
 `probe_auth_ids` 仍生效。请求默认最多等 1500 毫秒，负值表示仅排队不等；超时后
 使用已有缓存或不注入，后台探测最多继续到 60 秒总超时。增大等待时间提高首个
 请求命中率，但会增加首包延迟。
+
+`on_demand_cooldown_seconds`：在 `on_demand` 下，某账号+模型连续 3 轮探测都未命中
+目标 state 后进入冷却。冷却期间请求门禁和 `error_aware_backoff` 补探都不会再为该
+账号+模型发起探测；命中后立即清除冷却。默认 600 秒，防止持续失败的账号在高频请求下
+反复探测触发风控。
 
 `use_issued_at` 无需密钥解析 Fernet 信封的版本、签发时间和块布局；不会解密或验证
 HMAC。保持目标长度检查，并拒绝无效、过期、明显来自未来的 state。开启后过期

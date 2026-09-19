@@ -26,6 +26,7 @@ plugins:
       # 可选：probe_schedule: "on_demand"，空闲时不做定时/启动探测。
       probe_wait_milliseconds: 1500
       probe_timeout_seconds: 60
+      on_demand_cooldown_seconds: 600
       use_issued_at: false
       require_completed: false
       error_aware_backoff: false

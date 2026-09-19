@@ -237,6 +237,7 @@ func pluginRegistration() registration {
 				{Name: "probe_schedule", Type: pluginapi.ConfigFieldTypeEnum, EnumValues: []string{"fixed", "state_aware", "on_demand"}, Description: "探测调度方式。fixed 为固定间隔；state_aware 在已持有新鲜 state 时跳过周期探测，等接近过期再续期。on_demand 无定时或启动探测，由请求触发。默认 fixed。"},
 				{Name: "probe_wait_milliseconds", Type: pluginapi.ConfigFieldTypeInteger, Description: "on_demand 请求等待上限（毫秒）。默认 1500，负数只排队不等待。"},
 				{Name: "probe_timeout_seconds", Type: pluginapi.ConfigFieldTypeInteger, Description: "on_demand 后台探测总超时（秒）。默认 60。"},
+				{Name: "on_demand_cooldown_seconds", Type: pluginapi.ConfigFieldTypeInteger, Description: "on_demand 下，某账号+模型连续 3 轮未命中后的探测冷却（秒）。默认 600。"},
 				{Name: "use_issued_at", Type: pluginapi.ConfigFieldTypeBoolean, Description: "按 Fernet 签发时间判断新鲜度；拒绝无效或过期 state。默认关闭。"},
 				{Name: "require_completed", Type: pluginapi.ConfigFieldTypeBoolean, Description: "仅在 response.completed / completed 响应后采集 state。默认关闭。"},
 				{Name: "error_aware_backoff", Type: pluginapi.ConfigFieldTypeBoolean, Description: "临时错误提前重探，额度不足按账号退避。默认关闭。"},

@@ -15,27 +15,29 @@ import (
 )
 
 type pluginRuntime struct {
-	mu             sync.Mutex
-	config         pluginConfig
-	cache          *stateCache
-	statuses       map[cacheKey]probeRecord
-	windows        map[cacheKey]windowStats
-	probeLogs      []probeLogEntry
-	injections     []injectionLogEntry
-	globalErr      string
-	host           hostAPI
-	transport      probeTransport
-	nowFunc        func() time.Time
-	trigger        chan struct{}
-	targetTrigger  chan cacheKey
-	nextProbeAt    time.Time
-	demandTrigger  chan demandProbe
-	demandPending  map[cacheKey]chan struct{}
-	quotaUntil     map[string]time.Time
-	poolCursor     uint64
-	harvestPending map[harvestKey]*harvestCandidate
-	cancel         context.CancelFunc
-	wg             sync.WaitGroup
+	mu                 sync.Mutex
+	config             pluginConfig
+	cache              *stateCache
+	statuses           map[cacheKey]probeRecord
+	windows            map[cacheKey]windowStats
+	probeLogs          []probeLogEntry
+	injections         []injectionLogEntry
+	globalErr          string
+	host               hostAPI
+	transport          probeTransport
+	nowFunc            func() time.Time
+	trigger            chan struct{}
+	targetTrigger      chan cacheKey
+	nextProbeAt        time.Time
+	demandTrigger      chan demandProbe
+	demandPending      map[cacheKey]chan struct{}
+	quotaUntil         map[string]time.Time
+	probeMissRounds    map[cacheKey]int
+	probeCooldownUntil map[cacheKey]time.Time
+	poolCursor         uint64
+	harvestPending     map[harvestKey]*harvestCandidate
+	cancel             context.CancelFunc
+	wg                 sync.WaitGroup
 }
 
 type probeLogEntry struct {
@@ -101,20 +103,22 @@ var rt = newRuntime()
 func newRuntime() *pluginRuntime {
 	cfg := normalizeConfig(pluginConfig{})
 	return &pluginRuntime{
-		config:         cfg,
-		cache:          newStateCache(cfg.ttl(), cfg.targetLength(), time.Now),
-		statuses:       make(map[cacheKey]probeRecord),
-		windows:        make(map[cacheKey]windowStats),
-		injections:     make([]injectionLogEntry, 0),
-		host:           liveHost{},
-		transport:      utlsProbeTransport{},
-		nowFunc:        time.Now,
-		trigger:        make(chan struct{}, 1),
-		targetTrigger:  make(chan cacheKey, 64),
-		demandTrigger:  make(chan demandProbe, 64),
-		demandPending:  make(map[cacheKey]chan struct{}),
-		quotaUntil:     make(map[string]time.Time),
-		harvestPending: make(map[harvestKey]*harvestCandidate),
+		config:             cfg,
+		cache:              newStateCache(cfg.ttl(), cfg.targetLength(), time.Now),
+		statuses:           make(map[cacheKey]probeRecord),
+		windows:            make(map[cacheKey]windowStats),
+		injections:         make([]injectionLogEntry, 0),
+		host:               liveHost{},
+		transport:          utlsProbeTransport{},
+		nowFunc:            time.Now,
+		trigger:            make(chan struct{}, 1),
+		targetTrigger:      make(chan cacheKey, 64),
+		demandTrigger:      make(chan demandProbe, 64),
+		demandPending:      make(map[cacheKey]chan struct{}),
+		quotaUntil:         make(map[string]time.Time),
+		probeMissRounds:    make(map[cacheKey]int),
+		probeCooldownUntil: make(map[cacheKey]time.Time),
+		harvestPending:     make(map[harvestKey]*harvestCandidate),
 	}
 }
 
