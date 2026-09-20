@@ -172,6 +172,13 @@ type statusAccountModel struct {
 	TotalTokens         int64   `json:"total_tokens"`
 	AvgTTFTSeconds      float64 `json:"avg_ttft_seconds"`
 	LastRequestAtUnix   int64   `json:"last_request_at_unix,omitempty"`
+	Injections          int64   `json:"injections"`
+	LastInjectedAtUnix  int64   `json:"last_injected_at_unix,omitempty"`
+	LastInjectedSource  string  `json:"last_injected_source,omitempty"`
+	BareRequests        int64   `json:"bare_requests"`
+	LastBareAtUnix      int64   `json:"last_bare_at_unix,omitempty"`
+	TicketEchoes        int64   `json:"ticket_echoes"`
+	TicketChanges       int64   `json:"ticket_changes"`
 }
 
 func handleManagement(raw []byte) ([]byte, error) {
@@ -488,6 +495,7 @@ func buildAccountCards(auths []statusAuth, models []string, cfg pluginConfig, sn
 			key := makeCacheKey(auth.ID, model)
 			entry, hasState := entries[key]
 			stats := snap.Windows[key]
+			counters := snap.TicketStats[key]
 			modelCard := statusAccountModel{
 				Model:               model,
 				HasState:            hasState,
@@ -499,6 +507,17 @@ func buildAccountCards(auths []statusAuth, models []string, cfg pluginConfig, sn
 				OutputTokens:        stats.OutputTokens,
 				ReasoningTokens:     stats.ReasoningTokens,
 				TotalTokens:         stats.TotalTokens,
+				Injections:          counters.Injections,
+				LastInjectedSource:  counters.LastInjectedFrom,
+				BareRequests:        counters.Bare,
+				TicketEchoes:        counters.Echoes,
+				TicketChanges:       counters.Changes,
+			}
+			if !counters.LastInjectedAt.IsZero() {
+				modelCard.LastInjectedAtUnix = counters.LastInjectedAt.Unix()
+			}
+			if !counters.LastBareAt.IsZero() {
+				modelCard.LastBareAtUnix = counters.LastBareAt.Unix()
 			}
 			if stats.TTFTSamples > 0 {
 				modelCard.AvgTTFTSeconds = stats.TTFTTotal.Seconds() / float64(stats.TTFTSamples)
@@ -856,7 +875,9 @@ func writeModelBlock(out *bytes.Buffer, model statusAccountModel, showState bool
 	out.WriteString(metricHTML("Token", fmt.Sprintf("%d", model.TotalTokens)))
 	out.WriteString(metricHTML("平均首字", avgTTFTText(model.AvgTTFTSeconds)))
 	out.WriteString(metricHTML("连续失败", fmt.Sprintf("%d", model.ConsecutiveFailures)))
+	writeTicketMetrics(out, model)
 	out.WriteString("</div>")
+	writeTicketNotes(out, model)
 	if showState && model.HasState && model.State != "" {
 		out.WriteString("<details class=\"state\"><summary>查看 state</summary><code>")
 		out.WriteString(html.EscapeString(model.State))
@@ -944,13 +965,45 @@ func writeCompactModelBlock(out *bytes.Buffer, authID string, model statusAccoun
 	out.WriteString(metricHTML("Token", fmt.Sprintf("%d", model.TotalTokens)))
 	out.WriteString(metricHTML("平均首字", avgTTFTText(model.AvgTTFTSeconds)))
 	out.WriteString(metricHTML("连续失败", fmt.Sprintf("%d", model.ConsecutiveFailures)))
+	writeTicketMetrics(out, model)
 	out.WriteString("</div>")
+	writeTicketNotes(out, model)
 	if showState && model.HasState && model.State != "" {
 		out.WriteString("<details class=\"state\"><summary>查看 state</summary><code>")
 		out.WriteString(html.EscapeString(model.State))
 		out.WriteString("</code></details>")
 	}
 	out.WriteString("</div>")
+}
+
+// writeTicketMetrics renders what production traffic actually did with the cache
+// for this auth+model: requests that carried a cached ticket, requests that left
+// without one, and how the upstream answered the ticket we sent.
+func writeTicketMetrics(out *bytes.Buffer, model statusAccountModel) {
+	out.WriteString(metricHTML("已注入", fmt.Sprintf("%d", model.Injections)))
+	out.WriteString(metricHTML("裸发", fmt.Sprintf("%d", model.BareRequests)))
+	out.WriteString(metricHTML("回票相同", fmt.Sprintf("%d", model.TicketEchoes)))
+	out.WriteString(metricHTML("换票", fmt.Sprintf("%d", model.TicketChanges)))
+}
+
+func writeTicketNotes(out *bytes.Buffer, model statusAccountModel) {
+	if model.Injections > 0 {
+		out.WriteString("<div class=\"muted\">最近一次注入的票来自 <code>")
+		out.WriteString(html.EscapeString(model.LastInjectedSource))
+		out.WriteString("</code>。</div>")
+	}
+	if model.BareRequests > 0 {
+		out.WriteString("<div class=\"muted\">")
+		out.WriteString(fmt.Sprintf("%d", model.BareRequests))
+		out.WriteString(" 次请求在缓存里没有可用票时直接发出（未携带 state）。</div>")
+	}
+	if model.TicketEchoes+model.TicketChanges > 0 {
+		out.WriteString("<div class=\"muted\">上游回包带的票与手上那张：相同 ")
+		out.WriteString(fmt.Sprintf("%d", model.TicketEchoes))
+		out.WriteString(" 次，不同 ")
+		out.WriteString(fmt.Sprintf("%d", model.TicketChanges))
+		out.WriteString(" 次。相同占多数说明上游会原样还票，不同占多数说明它在重新签发票。</div>")
+	}
 }
 
 func chipHTML(label, value string) string {

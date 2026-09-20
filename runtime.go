@@ -20,6 +20,7 @@ type pluginRuntime struct {
 	cache              *stateCache
 	statuses           map[cacheKey]probeRecord
 	windows            map[cacheKey]windowStats
+	ticketStats        map[cacheKey]ticketCounters
 	probeLogs          []probeLogEntry
 	injections         []injectionLogEntry
 	globalErr          string
@@ -81,6 +82,22 @@ type injectionLogEntry struct {
 	Failed          bool
 }
 
+// ticketCounters answers, per auth+model, the questions the state value itself
+// cannot: whether production requests actually carried a ticket, and whether the
+// upstream handed back the ticket it was given or minted a different one.
+type ticketCounters struct {
+	AuthID           string
+	Model            string
+	Injections       int64
+	LastInjectedAt   time.Time
+	LastInjectedFrom string
+	Bare             int64
+	LastBareAt       time.Time
+	Echoes           int64
+	Changes          int64
+	LastTurnoverAt   time.Time
+}
+
 type windowStats struct {
 	WindowStartedAt     time.Time
 	Requests            int64
@@ -107,6 +124,7 @@ func newRuntime() *pluginRuntime {
 		cache:              newStateCache(cfg.ttl(), cfg.targetLength(), time.Now),
 		statuses:           make(map[cacheKey]probeRecord),
 		windows:            make(map[cacheKey]windowStats),
+		ticketStats:        make(map[cacheKey]ticketCounters),
 		injections:         make([]injectionLogEntry, 0),
 		host:               liveHost{},
 		transport:          utlsProbeTransport{},
@@ -213,6 +231,16 @@ func restorePersistedRuntimeLocked(r *pluginRuntime, cfg pluginConfig) {
 	}
 	r.probeLogs = append(r.probeLogs, file.Logs...)
 	r.injections = append(r.injections, file.Injections...)
+	if r.ticketStats == nil {
+		r.ticketStats = make(map[cacheKey]ticketCounters)
+	}
+	for _, counters := range file.Counters {
+		key := makeCacheKey(counters.AuthID, counters.Model)
+		if key.AuthID == "" || key.Model == "" {
+			continue
+		}
+		r.ticketStats[key] = counters
+	}
 }
 
 func (r *pluginRuntime) applyProbeAuthIDs(authIDs []string) error {
@@ -322,6 +350,7 @@ func (r *pluginRuntime) observeState(authID, model, state, source string) bool {
 		return false
 	}
 	refresh := strings.EqualFold(strings.TrimSpace(source), "probe") || strings.EqualFold(strings.TrimSpace(source), "direct")
+	prev, hadPrev := r.cache.lookup(authID, model)
 	entry, accepted, reset := r.cache.storeTarget(authID, model, state, source, refresh)
 	if accepted && reset {
 		key := makeCacheKey(authID, model)
@@ -329,8 +358,39 @@ func (r *pluginRuntime) observeState(authID, model, state, source string) bool {
 		r.windows[key] = windowStats{WindowStartedAt: entry.StoredAt}
 		r.mu.Unlock()
 	}
+	if accepted && !refresh {
+		r.recordTicketTurnover(authID, model, hadPrev && strings.TrimSpace(prev.State) == state)
+	}
 	r.recordObservation(authID, model, state, accepted, source, "")
 	return accepted
+}
+
+// recordTicketTurnover notes whether a harvested response carried the ticket the
+// cache already held (an echo) or a different one (a change). Probed and direct
+// tickets are intentionally excluded: those are the requests asking for a new
+// ticket, so they would only ever report changes.
+func (r *pluginRuntime) recordTicketTurnover(authID, model string, same bool) {
+	if r == nil {
+		return
+	}
+	key := makeCacheKey(authID, model)
+	if key.AuthID == "" || key.Model == "" {
+		return
+	}
+	now := r.now()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	stats := r.ticketStats[key]
+	stats.AuthID = key.AuthID
+	stats.Model = key.Model
+	if same {
+		stats.Echoes++
+	} else {
+		stats.Changes++
+	}
+	stats.LastTurnoverAt = now
+	r.ticketStats[key] = stats
+	r.persistLocked()
 }
 
 func (r *pluginRuntime) recordProbe(target probeTarget, state string, accepted bool, errText string) {
@@ -389,6 +449,38 @@ func (r *pluginRuntime) recordInjection(req pluginapi.RequestInterceptRequest, e
 	if len(r.injections) > limit {
 		r.injections = append([]injectionLogEntry(nil), r.injections[len(r.injections)-limit:]...)
 	}
+	key := makeCacheKey(entry.AuthID, entry.Model)
+	if key.AuthID != "" && key.Model != "" {
+		stats := r.ticketStats[key]
+		stats.AuthID = key.AuthID
+		stats.Model = key.Model
+		stats.Injections++
+		stats.LastInjectedAt = r.now()
+		stats.LastInjectedFrom = entry.Source
+		r.ticketStats[key] = stats
+	}
+	r.persistLocked()
+}
+
+// recordBareRequest notes a production request that passed every gate but had no
+// usable cached state, so it went upstream without the header.
+func (r *pluginRuntime) recordBareRequest(authID, model string) {
+	if r == nil {
+		return
+	}
+	key := makeCacheKey(authID, model)
+	if key.AuthID == "" || key.Model == "" {
+		return
+	}
+	now := r.now()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	stats := r.ticketStats[key]
+	stats.AuthID = key.AuthID
+	stats.Model = key.Model
+	stats.Bare++
+	stats.LastBareAt = now
+	r.ticketStats[key] = stats
 	r.persistLocked()
 }
 
@@ -607,6 +699,10 @@ func (r *pluginRuntime) snapshotStatus() runtimeSnapshot {
 	for key, stats := range r.windows {
 		windows[key] = stats
 	}
+	ticketStats := make(map[cacheKey]ticketCounters, len(r.ticketStats))
+	for key, stats := range r.ticketStats {
+		ticketStats[key] = stats
+	}
 	logs := append([]probeLogEntry(nil), r.probeLogs...)
 	injections := append([]injectionLogEntry(nil), r.injections...)
 	r.mu.Unlock()
@@ -619,6 +715,7 @@ func (r *pluginRuntime) snapshotStatus() runtimeSnapshot {
 		ExpiredEntries: expiredEntries,
 		Records:        records,
 		Windows:        windows,
+		TicketStats:    ticketStats,
 		Logs:           logs,
 		Injections:     injections,
 		Now:            r.now(),
@@ -635,6 +732,7 @@ type runtimeSnapshot struct {
 	ExpiredEntries []cacheEntry
 	Records        []probeRecord
 	Windows        map[cacheKey]windowStats
+	TicketStats    map[cacheKey]ticketCounters
 	Logs           []probeLogEntry
 	Injections     []injectionLogEntry
 	Now            time.Time

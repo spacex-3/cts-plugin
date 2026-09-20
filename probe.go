@@ -232,23 +232,29 @@ func (rt *pluginRuntime) probeTargetOnce(ctx context.Context, target probeTarget
 		return
 	}
 	if cfg.directProbeEnabled() {
-		if state, errProbe := rt.probeOnce(ctx, "", target, cfg); errProbe == nil {
+		for attempt := 1; attempt <= cfg.attemptsPerRoute(); attempt++ {
+			if ctx.Err() != nil {
+				return
+			}
+			state, errProbe := rt.probeOnce(ctx, "", target, cfg)
+			if errProbe != nil {
+				rt.recordProbeAttempt(target, "direct", attempt, "", false, false, errProbe.Error())
+				if rt.stopForQuota(target.AuthID, cfg, errProbe) {
+					return
+				}
+				continue
+			}
 			targetMatch := cfg.stateAccepted(state)
 			errText := ""
 			if !targetMatch {
 				errText = fmt.Sprintf("turn state rejected (length %d, blocks %s)", len(strings.TrimSpace(state)), stateBlocksText(state))
 			}
-			rt.recordProbeAttempt(target, "direct", 0, state, targetMatch, false, errText)
+			rt.recordProbeAttempt(target, "direct", attempt, state, targetMatch, false, errText)
 			if targetMatch {
 				if rt.observeState(target.AuthID, target.Model, state, "direct") {
 					rt.resetProbeMiss(makeCacheKey(target.AuthID, target.Model))
 					return
 				}
-			}
-		} else {
-			rt.recordProbeAttempt(target, "direct", 0, "", false, false, errProbe.Error())
-			if rt.stopForQuota(target.AuthID, cfg, errProbe) {
-				return
 			}
 		}
 	}
@@ -272,12 +278,13 @@ func (rt *pluginRuntime) probeTargetWithProxies(ctx context.Context, proxies []s
 		rt.mu.Unlock()
 	}
 	attempts := cfg.maxAttempts()
+	perRoute := cfg.attemptsPerRoute()
 	var lastErr error
 	for attempt := 1; attempt <= attempts; attempt++ {
 		if ctx.Err() != nil || rt.quotaBlocked(target.AuthID, cfg) {
 			return
 		}
-		proxyIndex := (start + attempt - 1) % len(proxies)
+		proxyIndex := (start + (attempt-1)/perRoute) % len(proxies)
 		proxyURL := proxies[proxyIndex]
 		proxyLabel := redactProxyUser(proxyURL)
 		state, errProbe := rt.probeOnce(ctx, proxyURL, target, cfg)

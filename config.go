@@ -14,6 +14,8 @@ const (
 	defaultTargetStateLength       = 292
 	defaultTTLSeconds              = 3600
 	defaultMaxProbeAttempts        = 3
+	defaultAttemptsPerRoute        = 1
+	maxAttemptsPerRoute            = 10
 	defaultMaxOutputTokens         = 16
 	defaultProbeLogLimit           = 200
 	maxProbeLogLimit               = 1000
@@ -62,6 +64,7 @@ type pluginConfig struct {
 	RotateProxyStart        bool     `yaml:"rotate_proxy_start"`
 	ProbeLogLimit           int      `yaml:"probe_log_limit"`
 	MaxProbeAttempts        int      `yaml:"max_probe_attempts"`
+	AttemptsPerRoute        int      `yaml:"attempts_per_route"`
 	FailureReprobeThreshold int      `yaml:"failure_reprobe_threshold"`
 	MaxOutputTokens         int      `yaml:"max_output_tokens"`
 	Prompt                  string   `yaml:"prompt"`
@@ -147,6 +150,19 @@ func (c pluginConfig) maxAttempts() int {
 		return defaultMaxProbeAttempts
 	}
 	return c.MaxProbeAttempts
+}
+
+// attemptsPerRoute is how many tries a single egress (direct or one proxy) gets
+// before the probe moves to the next one. The default of 1 keeps the historical
+// behaviour of spending the whole max_probe_attempts budget on distinct egresses.
+func (c pluginConfig) attemptsPerRoute() int {
+	if c.AttemptsPerRoute <= 0 {
+		return defaultAttemptsPerRoute
+	}
+	if c.AttemptsPerRoute > maxAttemptsPerRoute {
+		return maxAttemptsPerRoute
+	}
+	return c.AttemptsPerRoute
 }
 
 func (c pluginConfig) proxyScheme() string {
@@ -311,6 +327,12 @@ func normalizeConfig(cfg pluginConfig) pluginConfig {
 	}
 	if cfg.MaxProbeAttempts < 0 {
 		cfg.MaxProbeAttempts = 0
+	}
+	if cfg.AttemptsPerRoute < 0 {
+		cfg.AttemptsPerRoute = 0
+	}
+	if cfg.AttemptsPerRoute > maxAttemptsPerRoute {
+		cfg.AttemptsPerRoute = maxAttemptsPerRoute
 	}
 	if cfg.ProbeLeadSeconds < 0 {
 		cfg.ProbeLeadSeconds = 0

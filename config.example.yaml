@@ -44,5 +44,6 @@ plugins:
       show_injection_headers: false
       probe_log_limit: 200
       max_probe_attempts: 3
+      attempts_per_route: 1
       failure_reprobe_threshold: 3
       prompt: "."

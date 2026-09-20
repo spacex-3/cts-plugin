@@ -4,12 +4,30 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
 )
 
 type persistedRuntimeFile struct {
 	Entries    []cacheEntry        `json:"entries,omitempty"`
 	Logs       []probeLogEntry     `json:"logs,omitempty"`
 	Injections []injectionLogEntry `json:"injections,omitempty"`
+	Counters   []ticketCounters    `json:"counters,omitempty"`
+}
+
+// sortedTicketCounters keeps the persisted file stable so repeated writes and
+// diffs stay comparable.
+func sortedTicketCounters(stats map[cacheKey]ticketCounters) []ticketCounters {
+	out := make([]ticketCounters, 0, len(stats))
+	for _, counters := range stats {
+		out = append(out, counters)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].AuthID == out[j].AuthID {
+			return out[i].Model < out[j].Model
+		}
+		return out[i].AuthID < out[j].AuthID
+	})
+	return out
 }
 
 var runtimeConfigDir = os.UserConfigDir
@@ -34,6 +52,7 @@ func (r *pluginRuntime) persistLocked() {
 		Entries:    append([]cacheEntry(nil), r.cache.snapshot()...),
 		Logs:       append([]probeLogEntry(nil), r.probeLogs...),
 		Injections: append([]injectionLogEntry(nil), r.injections...),
+		Counters:   sortedTicketCounters(r.ticketStats),
 	}
 	data, errMarshal := json.Marshal(file)
 	if errMarshal != nil {

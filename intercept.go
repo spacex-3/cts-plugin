@@ -43,6 +43,11 @@ func applyAfterAuth(req pluginapi.RequestInterceptRequest) pluginapi.RequestInte
 	rt.ensureDemandProbe(makeCacheKey(authID, model), cfg)
 	entry, ok := rt.cache.lookup(authID, model)
 	if !ok || strings.TrimSpace(entry.State) == "" {
+		rt.recordBareRequest(authID, model)
+		rt.host.Log("debug", "codex-turn-state: request sent without a turn state", map[string]any{
+			"auth_id": authID,
+			"model":   model,
+		})
 		return pluginapi.RequestInterceptResponse{}
 	}
 	rt.recordInjection(req, entry)

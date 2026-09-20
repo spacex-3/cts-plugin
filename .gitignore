@@ -1,4 +1,6 @@
 /dist/
+/cts-plugin
+/cts-plugin.exe
 *.so
 *.h
 *.dylib

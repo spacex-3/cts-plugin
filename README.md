@@ -59,6 +59,7 @@ plugins:
       show_injection_headers: false
       probe_log_limit: 200
       max_probe_attempts: 3
+      attempts_per_route: 1
       failure_reprobe_threshold: 3
       prompt: "."
 ```
@@ -80,10 +81,11 @@ plugins:
 - `inject`: inject fresh cached state into matching requests. Default: `true`.
 - `harvest`: collect matching state from normal Codex traffic. Default: `true`.
 - `probe`: run background probes. Default: `true`.
-- `direct_probe`: send one no-proxy baseline request before proxy attempts for each auth/model. The baseline is logged but never cached. Default: `false`.
+- `direct_probe`: send a no-proxy baseline request before proxy attempts for each auth/model; an accepted baseline is cached and ends the round. Default: `false`.
 - `show_state_values`: display and retain future full state values in the status page/JSON probe log. Default: `false`; enable only on a protected management endpoint.
 - `probe_log_limit`: maximum in-memory attempt records. Default: `200`, maximum: `1000`.
 - `max_probe_attempts`: attempts per auth/model in one cycle. Default: `3`.
+- `attempts_per_route`: how many times one egress is tried before the probe moves on to the next one, inside the `max_probe_attempts` budget. Raise it when a single attempt per egress keeps returning a rejected state length, since a second request over the same egress often returns an accepted one. Default: `1`, maximum: `10`.
 - `failure_reprobe_threshold`: consecutive production request failures inside the current state window that trigger a targeted reprobe. Default: `3`; a negative value disables this behavior.
 - `max_output_tokens`: deprecated compatibility field. It is ignored because Codex upstream rejects token-limit parameters.
 - `prompt`: minimal probe input. Default: `.`.
@@ -137,7 +139,7 @@ are pseudonyms, not a cryptographic anonymity guarantee. Runtime persistence sti
 contains usable state with the existing owner-only file permissions. This change
 does not encrypt local storage.
 
-The page shows account cards at the top with a stable per-account color, current state length, live countdown, and requests/successes/total tokens/average TTFT for the current state window, followed by recent probe results and every proxy attempt. Proxy credentials and access tokens are never displayed. Full state values are displayed only when `show_state_values: true`; existing records captured while it was disabled remain hidden.
+The page shows account cards at the top with a stable per-account color, current state length, live countdown, and requests/successes/total tokens/average TTFT for the current state window, followed by recent probe results and every proxy attempt. Each card also counts four things the state value cannot show: `已注入` (requests that carried a cached ticket), `裸发` (requests that passed every gate but left with no state), `回票相同` (harvested responses that handed back the exact ticket already held) and `换票` (responses that carried a different one). A non-zero `裸发` means injection is silently failing; mostly `回票相同` means the upstream returns the ticket it was given, mostly `换票` means it reissues one per turn. Proxy credentials and access tokens are never displayed. Full state values are displayed only when `show_state_values: true`; existing records captured while it was disabled remain hidden.
 
 ## Build locally
 
