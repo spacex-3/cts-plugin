@@ -1,11 +1,10 @@
-Fix Codex probe requests that were rejected with `Unsupported parameter: max_output_tokens`.
+Report what turn-state injection actually does per account, and let one probe egress retry before the rotation moves on.
 
-## Fixed in v0.2.1
+## Added in v0.5.0
 
-- Stop sending `max_output_tokens` to the native Codex Responses endpoint.
-- Match CPA's Codex request normalization by including `parallel_tool_calls` and `reasoning.encrypted_content`.
-- Keep `max_output_tokens` as an ignored compatibility setting so existing configurations continue to load.
-- Continue to support provider-style SOCKS5 syntax, direct baselines, and per-attempt state logs from v0.2.0.
+- The status page and JSON now count, per account+model, requests that carried a cached ticket (`injections`), requests that passed every gate but left with no state (`bare_requests`), and whether a harvested response handed back the ticket already held (`ticket_echoes`) or a different one (`ticket_changes`). A non-zero `bare_requests` is the visible signal that injection is silently failing open, and the echo/change split shows whether the upstream returns the ticket it was given or reissues one per turn.
+- The counters are persisted in `runtime.json` next to cached states, probe logs, and injection records, so a reload keeps the history.
+- `attempts_per_route` (default `1`, maximum `10`): retry the direct route or a single proxy before the probe moves on to the next egress, inside the `max_probe_attempts` budget. Raise it when one attempt per egress keeps returning a rejected state length. The default keeps the previous rotation.
 
 ## Install with CPA
 
