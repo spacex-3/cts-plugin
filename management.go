@@ -57,6 +57,7 @@ type statusView struct {
 	TTLSeconds              int               `json:"ttl_seconds"`
 	FailureReprobeThreshold int               `json:"failure_reprobe_threshold"`
 	MaxProbeAttempts        int               `json:"max_probe_attempts"`
+	AttemptsPerRoute        int               `json:"attempts_per_route"`
 	ProbeSchedule           string            `json:"probe_schedule"`
 	ProbeLeadSeconds        int               `json:"probe_lead_seconds"`
 	NextProbeAtUnix         int64             `json:"next_probe_at_unix,omitempty"`
@@ -330,6 +331,7 @@ func buildStatusView() statusView {
 		TTLSeconds:              ttlSeconds,
 		FailureReprobeThreshold: cfg.failureReprobeThreshold(),
 		MaxProbeAttempts:        cfg.maxAttempts(),
+		AttemptsPerRoute:        cfg.attemptsPerRoute(),
 		ProbeSchedule:           cfg.probeSchedule(),
 		ProbeLeadSeconds:        int(cfg.probeLead() / time.Second),
 		Inject:                  cfg.injectEnabled(),
@@ -612,6 +614,7 @@ func renderStatusPage(view statusView, triggered bool) []byte {
 	}
 	out.WriteString(chipHTML("失败重探阈值", fmt.Sprintf("%d", view.FailureReprobeThreshold)))
 	out.WriteString(chipHTML("每轮尝试", fmt.Sprintf("%d", view.MaxProbeAttempts)))
+	out.WriteString(chipHTML("每线路尝试", fmt.Sprintf("%d", view.AttemptsPerRoute)))
 	out.WriteString(chipHTML("探测调度", view.ProbeSchedule))
 	out.WriteString(chipHTML("续期提前", formatDuration(time.Duration(view.ProbeLeadSeconds)*time.Second)))
 	out.WriteString(chipHTML("代理数量", fmt.Sprintf("%d", len(view.Proxies))))
