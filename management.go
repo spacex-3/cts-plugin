@@ -607,7 +607,7 @@ func renderStatusPage(view statusView, triggered bool) []byte {
 
 	out.WriteString("<div class=\"chips\">")
 	out.WriteString(chipHTML("目标长度", fmt.Sprintf("%d", view.TargetStateLength)))
-	out.WriteString(chipHTML("接受块数", strings.Trim(strings.Join(strings.Fields(fmt.Sprint(view.AcceptedBlocks)), "/"), "[]")))
+	out.WriteString(chipHTML("接受块数", describeAcceptedBlocks(view.AcceptedBlocks)))
 	out.WriteString(chipHTML("TTL", formatDuration(time.Duration(view.TTLSeconds)*time.Second)))
 	out.WriteString(chipHTML("探测间隔", formatDuration(time.Duration(view.IntervalSeconds)*time.Second)))
 	if view.NextProbeAtUnix > 0 {

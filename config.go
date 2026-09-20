@@ -31,14 +31,16 @@ const (
 )
 
 var (
-	pluginVersion      = "0.5.3"
+	pluginVersion      = "0.5.4"
 	defaultProbeModels = []string{"gpt-5.6-sol", "gpt-6-astra"}
 
 	// Fernet envelope block counts accepted as a full-strength turn state:
-	// 10 blocks = 292 bytes (gpt-5.5 era), 11 = 312 (gpt-5.6 / gpt-6 era),
-	// 12 = 332 (Team / business plans). Upstream still changes this shape, so
-	// accepted_blocks stays configurable.
-	defaultAcceptedBlocks = []int{10, 11, 12}
+	// 10 blocks = 292 characters, 12 = 332 (Team/business). 11 blocks = 312 is
+	// deliberately NOT accepted by default: it is what the plugin sees from
+	// throttled or proxied exits, and mixing it into the cache would replace a
+	// known-good 292 ticket. Add 11 to accepted_blocks only if 312 is confirmed
+	// as a legitimate shape for your models.
+	defaultAcceptedBlocks = []int{10, 12}
 )
 
 type pluginConfig struct {
@@ -145,13 +147,31 @@ func (c pluginConfig) acceptedBlocks() []int {
 	return out
 }
 
-func (c pluginConfig) acceptedBlocksText() string {
-	blocks := c.acceptedBlocks()
+// blockStateLength is the base64 length a Fernet envelope with this many AES
+// blocks ends up at: 57 bytes of version/timestamp/IV/HMAC plus 16 bytes per
+// block, base64-encoded. 10 → 292, 11 → 312, 12 → 332.
+func blockStateLength(blocks int) (int, bool) {
+	if blocks <= 0 {
+		return 0, false
+	}
+	raw := 57 + blocks*16
+	return ((raw + 2) / 3) * 4, true
+}
+
+func stateBlocksLabel(blocks int) string {
+	length, ok := blockStateLength(blocks)
+	if !ok {
+		return strconv.Itoa(blocks)
+	}
+	return strconv.Itoa(blocks) + "≈" + strconv.Itoa(length)
+}
+
+func describeAcceptedBlocks(blocks []int) string {
 	parts := make([]string, 0, len(blocks))
 	for _, block := range blocks {
-		parts = append(parts, strconv.Itoa(block))
+		parts = append(parts, stateBlocksLabel(block))
 	}
-	return strings.Join(parts, "/")
+	return strings.Join(parts, " / ")
 }
 
 func (c pluginConfig) stateAccepted(state string) bool {

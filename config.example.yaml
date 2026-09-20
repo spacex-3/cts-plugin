@@ -35,9 +35,10 @@ plugins:
       quota_backoff_seconds: 900
       rotate_proxy_start: false
       target_state_length: 292
-      # 10≈292（gpt-5.5 时代）、11≈312（gpt-5.6 / gpt-6 系列）、12≈332（Team/企业）。
-      # 探测被拒时状态页会回显实收块数，把它加进来即可；想严格一点可填 [10, 12]。
-      accepted_blocks: [10, 11, 12]
+      # 收票门槛：10≈292（Pro/Plus）、12≈332（Team/企业）。
+      # 11≈312 是代理/限流出口常见的形态，默认拒绝，不会顶掉你那张 292；
+      # 确认 312 也正常后再写成 [10, 11, 12]。
+      accepted_blocks: [10, 12]
       ttl_seconds: 3600
       inject: true
       harvest: true

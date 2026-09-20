@@ -1,4 +1,9 @@
-Keep repeated egresses in the proxy list, and document how the proxy fields are filled.
+Keep the admission filter conservative: 312-character states stay out unless you opt in.
+
+## Changed in v0.5.4
+
+- `accepted_blocks` goes back to `[10, 12]` (≈292 / 332) as the default. v0.5.2 widened it to include `11` (≈312) on the strength of a third-party report that the gpt-5.6 / gpt-6 era returns 312; that claim contradicts both field observation (direct exits return 292, proxied exits return 312) and another implementation that targets these same models at 292. Since a 312 ticket could displace a known-good 292 one, the filter now rejects 312 by default and the operator opts in with `accepted_blocks: [10, 11, 12]`.
+- The status page chip now renders the accepted shapes as `10≈292 / 12≈332` instead of bare block numbers, and the rejection message names the shape it saw, so the choice is visible rather than implicit.
 
 ## Fixed in v0.5.3
 

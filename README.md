@@ -22,7 +22,7 @@ Then add the plugin configuration shown in [`config.example.yaml`](config.exampl
 - Optionally records a direct, no-proxy baseline and then sends minimal streaming Codex requests through a rotating proxy.
 - Uses a dedicated uTLS HTTP/2 connection for every probe attempt.
 - Stops reading and closes the connection immediately after finding turn-state metadata.
-- Accepts only states whose Fernet block count is allowed (`accepted_blocks`, default `[10, 11, 12]` ≈ 292/312/332); non-Fernet states fall back to `target_state_length` (default: `292`).
+- Accepts only states whose Fernet block count is allowed (`accepted_blocks`, default `[10, 12]` ≈ 292/332); non-Fernet states fall back to `target_state_length` (default: `292`).
 - Harvests matching state from regular HTTP, SSE, and WebSocket Codex responses.
 - Caches state in memory by exact runtime auth ID plus resolved model.
 - Replaces `X-Codex-Turn-State` on later matching requests while the state is within `ttl_seconds` (default: one hour).
@@ -101,7 +101,7 @@ For SOCKS5-only providers such as BestGo, set `proxy_scheme: socks5` when the en
 - `probe_schedule`: `fixed` probes on a constant interval; `state_aware` skips periodic probes while a fresh state is cached and only resumes shortly before expiry. Default: `fixed`.
 - `probe_lead_seconds`: lead time before state expiry used by `state_aware`. Default: `300`.
 - `target_state_length`: required state length. Default: `292`.
-- `accepted_blocks`: accepted Fernet ciphertext block counts. Default: `[10, 11, 12]`; `10` ≈ 292 characters (gpt-5.5 era), `11` ≈ 312 (gpt-5.6 / gpt-6 era), `12` ≈ 332 (Team/business). Other shapes are rejected. Valid Fernet states use block count first; non-Fernet states fall back to `target_state_length`. If probes start failing with `turn state rejected (length …, blocks …)`, the status page now shows the received shape so you can add it here. Set `[10, 12]` to keep the stricter pre-0.5.2 behaviour.
+- `accepted_blocks`: the admission filter for tickets. Only states whose Fernet block count appears here are cached and injected. Default: `[10, 12]` — `10` ≈ 292 characters (Pro/Plus), `12` ≈ 332 (Team/business). `11` ≈ 312 is the shape proxied or throttled exits commonly return, so it is rejected by default: it can never displace the known-good 292 ticket you already hold. Add `11` only once 312 is confirmed as a legitimate shape for your models. Valid Fernet states use block count first; non-Fernet states fall back to `target_state_length`. Rejections are reported with the received length and block count so the choice is visible.
 - `ttl_seconds`: maximum cache age for injection. Default: `3600`.
 - `inject`: inject fresh cached state into matching requests. Default: `true`.
 - `harvest`: collect matching state from normal Codex traffic. Default: `true`.
@@ -174,7 +174,7 @@ That text is the redacted fallback used only when the plugin cannot safely echo 
 | --- | --- |
 | `未配置代理，且 direct_probe 未开启` | Probing needs an egress. Add a proxy, or enable `direct_probe` for direct-only probing. |
 | `代理配置里没有一条能解析` | Fill one `host:port:user:password` per line (credentials optional) or paste a JSON array. Unparsable lines are skipped and logged with their line number. |
-| `上游返回的 state 未被接受（长度 … / 块 …）` | Upstream changed the state shape. Add the reported block count to `accepted_blocks` (defaults already allow 10/11/12). |
+| `上游返回的 state 未被接受（长度 312 / 块 11）` | That egress returned a shape outside the admission filter (292/332 by default). This is expected: the plugin keeps injecting the previous accepted ticket and the probe moves to the next egress. Add `11` to `accepted_blocks` only if 312 is confirmed usable. |
 | `探测出口连接失败` | The proxy is unreachable, throttled, or the scheme is wrong (SOCKS5-only providers such as BestGo need `proxy_scheme: socks5`). See logs for the egress and cause. |
 | `上游返回 HTTP 4xx/5xx` | Upstream rejected the probe; the account backs off per `error_aware_backoff` / `quota_backoff_seconds`. |
 

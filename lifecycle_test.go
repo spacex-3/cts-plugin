@@ -86,11 +86,23 @@ func TestAcceptedBlocksCoversProNewEraAndTeam(t *testing.T) {
 		return base64.URLEncoding.EncodeToString(raw)
 	}
 
+	if length, _ := blockStateLength(10); length != 292 {
+		t.Fatalf("10 blocks = %d, want 292", length)
+	}
+	if length, _ := blockStateLength(11); length != 312 {
+		t.Fatalf("11 blocks = %d, want 312", length)
+	}
+
 	cache := newStateCache(time.Hour, 292, func() time.Time { return now })
-	for name, blocks := range map[string]int{"pro": 10, "gpt-5.6-6": 11, "team": 12} {
+	for name, blocks := range map[string]int{"pro": 10, "team": 12} {
 		if !cache.putIfTarget("a", name, build(blocks), "probe") {
 			t.Fatalf("%d-block state should be accepted by default", blocks)
 		}
+	}
+	// 312 is what throttled or proxied exits hand back; it must not displace a
+	// known-good 292 ticket unless the operator opts in.
+	if cache.putIfTarget("a", "throttled", build(11), "probe") {
+		t.Fatal("11-block state should be rejected by default")
 	}
 	for _, blocks := range []int{9, 13} {
 		if cache.putIfTarget("a", "bad", build(blocks), "probe") {
@@ -98,13 +110,12 @@ func TestAcceptedBlocksCoversProNewEraAndTeam(t *testing.T) {
 		}
 	}
 
-	// An explicit list still wins over the default.
-	explicit := pluginConfig{AcceptedBlocks: []int{10, 12}}
-	if explicit.stateAccepted(build(11)) {
-		t.Fatal("explicit accepted_blocks [10,12] must still reject 11 blocks")
+	optingIn := pluginConfig{AcceptedBlocks: []int{10, 11, 12}}
+	if !optingIn.stateAccepted(build(11)) {
+		t.Fatal("accepted_blocks [10,11,12] must accept 11 blocks")
 	}
-	if !explicit.stateAccepted(build(10)) || !explicit.stateAccepted(build(12)) {
-		t.Fatal("explicit accepted_blocks [10,12] must accept 10 and 12 blocks")
+	if describeAcceptedBlocks(optingIn.acceptedBlocks()) != "10≈292 / 11≈312 / 12≈332" {
+		t.Fatalf("labels = %q", describeAcceptedBlocks(optingIn.acceptedBlocks()))
 	}
 }
 

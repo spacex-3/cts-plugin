@@ -26,7 +26,7 @@ plugins:
 - 不是在管理页面手工粘贴固定 state；而是使用轮换代理主动探测。
 - 还会从正常 HTTP、SSE、WebSocket Codex 响应自动采集。
 - 缓存键是精确的运行时账号 ID **加模型**，不会跨账号或模型共享。
-- 有形态过滤和 TTL；默认接受 Fernet 块数 `10/11/12`（≈292/312/332），非 Fernet 退回长度 `292`，默认一小时后失效。
+- 有形态过滤和 TTL；默认只接受 Fernet 块数 `10/12`（≈292/332），非 Fernet 退回长度 `292`，默认一小时后失效。
 - 缓存仅存在于 CPA 进程内，CPA 重启或插件重载后清空。
 - 管理资源用于查看脱敏状态和手动触发探测，不用于保存固定 state。
 
@@ -101,7 +101,7 @@ BestGo 这类 SOCKS5 节点，条目不带协议前缀时记得把 `proxy_scheme
 - `probe_schedule`：探测调度方式。`fixed` 为固定间隔；`state_aware` 在已持有新鲜 state 时跳过周期探测，等接近过期再续期。默认 `fixed`。
 - `probe_lead_seconds`：`state_aware` 模式下，在 state 过期前提前多少秒开始探测。默认 `300`。
 - `target_state_length`：只缓存指定长度的 state。默认 `292`。
-- `accepted_blocks`：按 Fernet 密文块数接受的 state 形态。默认 `[10, 11, 12]`：`10`≈292（gpt-5.5 时代）、`11`≈312（gpt-5.6 / gpt-6 系列）、`12`≈332（Team/企业），其余形态拒绝。合法 Fernet 优先按块数判断，非 Fernet 退回 `target_state_length`。若探测开始报 `turn state rejected (length …, blocks …)`，状态页会直接回显实收长度与块数，把它加进这一项即可；填 `[10, 12]` 可退回 0.5.2 之前的严格行为。
+- `accepted_blocks`：**收票门槛**。只有 Fernet 块数在这张表里的 state 才会进缓存、才会被注入。默认 `[10, 12]`：`10`≈292（Pro/Plus）、`12`≈332（Team/企业）。`11`≈312 是代理或限流出口常见的形态，**默认拒绝**——它不会顶掉你手上那张 292；确认 312 也是合格形态后再手动加成 `[10, 11, 12]`。合法 Fernet 优先按块数判断，非 Fernet 退回 `target_state_length`。探测被拒时状态页会回显实收长度与块数（例：长度 312 / 块 11），据此判断是换出口继续找还是放行这个形态。
 - `ttl_seconds`：缓存可用于注入的最长时间。默认 `3600`。
 - `inject`：向后续匹配请求注入缓存。默认 `true`。
 - `harvest`：从正常 Codex 流量采集。默认 `true`。
@@ -196,7 +196,7 @@ us.rrp.bestgo.work:10000:USER-zone-custom-region-US:password
 | --- | --- |
 | 未配置代理，且 direct_probe 未开启 | 探测需要一个出口。填代理，或把 `direct_probe` 设为 true 用直连探测。 |
 | 代理配置里没有一条能解析 | 逐行填 `host:port:user:password`（账号密码可省略），或直接粘贴 JSON 数组。写错的行会被跳过并记日志，日志里能看到第几行。 |
-| 上游返回的 state 未被接受（长度 … / 块 …） | 上游换了 state 形态。把回显的块数加进 `accepted_blocks`（默认已含 10/11/12）。 |
+| 上游返回的 state 未被接受（长度 312 / 块 11） | 这个出口给的票不在收票门槛内（默认只收 292/332）。这是**预期行为**：插件会继续用上一张合格的 292，探测会换下一条出口重试。若确认 312 也可用，把 `11` 加进 `accepted_blocks`。 |
 | 探测出口连接失败 | 代理本身不通、被限流或协议选错（BestGo 这类 SOCKS5 节点需要把 `proxy_scheme` 设为 `socks5`）。具体出口与原因见日志。 |
 | 上游返回 HTTP 4xx/5xx | 上游拒绝：额度、封控或凭据失效。对应账号会按 `error_aware_backoff` / `quota_backoff_seconds` 退避。 |
 
