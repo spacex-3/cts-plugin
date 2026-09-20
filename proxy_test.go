@@ -224,3 +224,21 @@ func TestProxyLinesMergesLegacyStringAndArray(t *testing.T) {
 		t.Fatal(errProxy)
 	}
 }
+
+// A rotating residential pool hands out a new exit IP per connection, so the
+// same endpoint listed twice means two egress slots, not a typo.
+func TestProxyLinesKeepRepeatedEgresses(t *testing.T) {
+	rotating := "us.rrp.example:10000:user-zone:pw"
+	cfg := normalizeConfig(pluginConfig{Proxies: []string{rotating, rotating, "us.rrp.example:10000:user-other:pw"}})
+	lines := cfg.proxyLines()
+	if len(lines) != 3 {
+		t.Fatalf("proxy lines = %#v, want 3 entries", lines)
+	}
+	proxies, issues := parseProxyURLsTolerant(strings.Join(lines, "\n"), cfg.proxyScheme())
+	if len(issues) != 0 || len(proxies) != 3 {
+		t.Fatalf("proxies = %#v issues = %#v, want 3 usable entries", proxies, issues)
+	}
+	if proxies[0] != proxies[1] {
+		t.Fatalf("proxies = %#v, want the repeated endpoint kept verbatim", proxies)
+	}
+}

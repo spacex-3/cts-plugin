@@ -1,4 +1,9 @@
-Let an empty proxy pool mean "direct only", and stop hiding why a probe failed.
+Keep repeated egresses in the proxy list, and document how the proxy fields are filled.
+
+## Fixed in v0.5.3
+
+- Repeated proxy entries are no longer deduplicated. A rotating residential pool returns a new exit IP per connection, so listing the same endpoint three times means three egress slots; the plugin used to collapse them into one. Listing it once and raising `attempts_per_route` behaves the same way.
+- `README.md`, `README_CN.md`, and `config.example.yaml` now show all three accepted shapes for the proxy fields (a multi-line JSON array, a YAML list, and one entry per line in the legacy `proxy` string) instead of only the JSON-array form.
 
 ## Fixed in v0.5.2
 

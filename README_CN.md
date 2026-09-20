@@ -68,7 +68,31 @@ plugins:
 
 - `proxy`：一个或多个轮换代理，每行一个。支持 `host:port:user:password`、代理商常见的 `socks5://host:port:user:password`，以及标准 `socks5://user:password@host:port` / HTTP(S) URL；凭据会在内部自动 URL 编码，IPv6 地址需要方括号。未命中目标长度时，下一次尝试自动轮询下一行代理。
 - `proxies`：推荐的多代理列表配置，每项一个代理；插件会把它和 `proxy` 合并。CPA 管理页对这个字段按 JSON 数组解析，因此请填写为 `["host:port:user:pw", "host2:port:user:pw"]`，不要直接逐行粘贴裸文本。直接往 `proxy` 里粘贴同样的 JSON 数组也能被识别。
-- 代理条目格式：`host:port:user:password`（账号密码可省略，写 `host:port` 即可），或 `协议://user:password@host:port`。每行一条；某一行写错只会跳过该行并记日志，不再让整轮探测失败。
+- 代理条目格式：`host:port:user:password`（账号密码可省略，写 `host:port` 即可），或 `协议://user:password@host:port`。某一行写错只会跳过该行并记日志，不再让整轮探测失败。
+- 同一个地址**可以重复填写**：动态家宽这类地址相同、每次连接换 IP 的代理，重复条目不再被去重，每一条都算一个独立出口。只填一条再配 `attempts_per_route` 效果相同。
+
+### 代理字段到底怎么填
+
+`proxies` 是数组字段，下面三种写法都合法（编辑器里的多行 JSON 数组也能直接粘）：
+
+```json
+["us.rrp.example:10000:user-zone:pw", "us.rrp.example:10000:user-zone:pw"]
+```
+
+```yaml
+proxies:
+  - "us.rrp.example:10000:user-zone:pw"
+  - "socks5://user:pw@us.rrp.example:10000"
+```
+
+```yaml
+# 兼容字段：每行一条，也可以直接粘 JSON 数组
+proxy: |
+  us.rrp.example:10000:user-zone:pw
+  us.rrp.example:10000:user-zone:pw
+```
+
+BestGo 这类 SOCKS5 节点，条目不带协议前缀时记得把 `proxy_scheme` 设为 `socks5`。
 - `proxy_scheme`：`proxy`/`proxies` 条目未写协议前缀时采用的默认协议。可选 `http` 或 `socks5`；BestGo 这类 SOCKS5 节点必须选 `socks5`。默认 `http`。
 - `auth_ids`：精确的 Codex 运行时账号 ID。留空表示允许所有可见 Codex 账号。
 - `probe_auth_ids`：只参与探测的账号。留空表示探测 `auth_ids` 范围内的全部账号；也可在状态页逐账号勾选并保存。

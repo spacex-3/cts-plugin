@@ -31,7 +31,7 @@ const (
 )
 
 var (
-	pluginVersion      = "0.5.2"
+	pluginVersion      = "0.5.3"
 	defaultProbeModels = []string{"gpt-5.6-sol", "gpt-6-astra"}
 
 	// Fernet envelope block counts accepted as a full-strength turn state:
@@ -201,7 +201,7 @@ func (c pluginConfig) proxyLines() []string {
 			}
 		}
 	}
-	lines = append(lines, uniqueTrimmed(c.Proxies)...)
+	lines = append(lines, trimmedList(c.Proxies)...)
 	return lines
 }
 
@@ -321,7 +321,7 @@ func containsFold(values []string, target string) bool {
 
 func normalizeConfig(cfg pluginConfig) pluginConfig {
 	cfg.Proxy = strings.TrimSpace(cfg.Proxy)
-	cfg.Proxies = uniqueTrimmed(cfg.Proxies)
+	cfg.Proxies = trimmedList(cfg.Proxies)
 	cfg.ProxyScheme = strings.ToLower(strings.TrimSpace(cfg.ProxyScheme))
 	cfg.ProbeSchedule = strings.ToLower(strings.TrimSpace(cfg.ProbeSchedule))
 	cfg.AuthIDs = uniqueTrimmed(cfg.AuthIDs)
@@ -362,6 +362,22 @@ func normalizeConfig(cfg pluginConfig) pluginConfig {
 	}
 	cfg.Prompt = strings.TrimSpace(cfg.Prompt)
 	return cfg
+}
+
+// trimmedList drops blank entries but keeps order and duplicates. A rotating
+// proxy endpoint (same host, new exit IP per connection) may legitimately be
+// listed several times to get several egress slots.
+func trimmedList(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(values))
+	for _, raw := range values {
+		if value := strings.TrimSpace(raw); value != "" {
+			out = append(out, value)
+		}
+	}
+	return out
 }
 
 func uniqueTrimmed(values []string) []string {

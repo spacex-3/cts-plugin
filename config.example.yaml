@@ -12,6 +12,7 @@ plugins:
       # proxies:
       #   - "proxy-one.example:8080:user:pass"
       #   - "socks5://proxy-two.example:10000:user:pass"
+      # 同一地址可重复填写：动态家宽这类每次连接换 IP 的代理，一条算一个出口，不会被去重。
       # BestGo 这类 SOCKS5 节点，如果 proxies 条目不带协议前缀，请设为 socks5。
       proxy_scheme: "http"
       auth_ids:

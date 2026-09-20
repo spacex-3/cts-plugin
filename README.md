@@ -68,7 +68,31 @@ plugins:
 
 - `proxy`: one or more rotating proxy endpoints, one per line. Supports `host:port:user:password`, provider-style `socks5://host:port:user:password`, and standard `socks5://user:password@host:port` / HTTP(S) URLs. Credentials are URL-encoded internally; bracket IPv6 literals. A nonmatching state advances to the next proxy on the following attempt.
 - `proxies`: recommended list form for multiple proxies, one item per entry. It is merged with `proxy`; use this in the CPA plugin config UI when the `proxy` string field collapses pasted newlines. Pasting a JSON array into `proxy` works too.
-- Proxy entry format: `host:port:user:password` (credentials optional, so `host:port` is fine), `scheme://user:password@host:port`, or a plain `host:port:user:password` line prefixed with the scheme. One entry per line; a single unparsable entry is skipped with a log line instead of aborting the round.
+- Proxy entry format: `host:port:user:password` (credentials optional, so `host:port` is fine), `scheme://user:password@host:port`, or a plain `host:port:user:password` line prefixed with the scheme. A single unparsable entry is skipped with a log line instead of aborting the round.
+- Repeating the same address is allowed and is no longer deduplicated: a rotating residential endpoint that hands out a new exit IP per connection counts once per listed entry. Listing it once and raising `attempts_per_route` is equivalent.
+
+### Filling the proxy fields
+
+The `proxies` field is an array; all three shapes below are valid (a multi-line JSON array pasted into the editor works too):
+
+```json
+["us.rrp.example:10000:user-zone:pw", "us.rrp.example:10000:user-zone:pw"]
+```
+
+```yaml
+proxies:
+  - "us.rrp.example:10000:user-zone:pw"
+  - "socks5://user:pw@us.rrp.example:10000"
+```
+
+```yaml
+# legacy field: one entry per line, a pasted JSON array also works
+proxy: |
+  us.rrp.example:10000:user-zone:pw
+  us.rrp.example:10000:user-zone:pw
+```
+
+For SOCKS5-only providers such as BestGo, set `proxy_scheme: socks5` when the entries carry no scheme.
 - `proxy_scheme`: default protocol for `proxy`/`proxies` entries that omit a scheme. Choose `http` or `socks5`; the latter is required for SOCKS5-only providers such as BestGo. Default: `http`.
 - `auth_ids`: exact Codex runtime auth IDs. Empty permits every Codex auth visible to the host.
 - `probe_auth_ids`: auth IDs that may be probed. Empty probes every auth in the `auth_ids` scope; the status page also supports per-account selection.
