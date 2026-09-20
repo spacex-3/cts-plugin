@@ -26,7 +26,7 @@ plugins:
 - 不是在管理页面手工粘贴固定 state；而是使用轮换代理主动探测。
 - 还会从正常 HTTP、SSE、WebSocket Codex 响应自动采集。
 - 缓存键是精确的运行时账号 ID **加模型**，不会跨账号或模型共享。
-- 有长度过滤和 TTL；默认只接受长度 `292`，默认一小时后失效。
+- 有形态过滤和 TTL；默认接受 Fernet 块数 `10/11/12`（≈292/312/332），非 Fernet 退回长度 `292`，默认一小时后失效。
 - 缓存仅存在于 CPA 进程内，CPA 重启或插件重载后清空。
 - 管理资源用于查看脱敏状态和手动触发探测，不用于保存固定 state。
 
@@ -67,7 +67,8 @@ plugins:
 ### 配置项
 
 - `proxy`：一个或多个轮换代理，每行一个。支持 `host:port:user:password`、代理商常见的 `socks5://host:port:user:password`，以及标准 `socks5://user:password@host:port` / HTTP(S) URL；凭据会在内部自动 URL 编码，IPv6 地址需要方括号。未命中目标长度时，下一次尝试自动轮询下一行代理。
-- `proxies`：推荐的多代理列表配置，每项一个代理；插件会把它和 `proxy` 合并。CPA 管理页对这个字段按 JSON 数组解析，因此请填写为 `["host:port:user:pw", "host2:port:user:pw"]`，不要直接逐行粘贴裸文本。
+- `proxies`：推荐的多代理列表配置，每项一个代理；插件会把它和 `proxy` 合并。CPA 管理页对这个字段按 JSON 数组解析，因此请填写为 `["host:port:user:pw", "host2:port:user:pw"]`，不要直接逐行粘贴裸文本。直接往 `proxy` 里粘贴同样的 JSON 数组也能被识别。
+- 代理条目格式：`host:port:user:password`（账号密码可省略，写 `host:port` 即可），或 `协议://user:password@host:port`。每行一条；某一行写错只会跳过该行并记日志，不再让整轮探测失败。
 - `proxy_scheme`：`proxy`/`proxies` 条目未写协议前缀时采用的默认协议。可选 `http` 或 `socks5`；BestGo 这类 SOCKS5 节点必须选 `socks5`。默认 `http`。
 - `auth_ids`：精确的 Codex 运行时账号 ID。留空表示允许所有可见 Codex 账号。
 - `probe_auth_ids`：只参与探测的账号。留空表示探测 `auth_ids` 范围内的全部账号；也可在状态页逐账号勾选并保存。
@@ -76,12 +77,12 @@ plugins:
 - `probe_schedule`：探测调度方式。`fixed` 为固定间隔；`state_aware` 在已持有新鲜 state 时跳过周期探测，等接近过期再续期。默认 `fixed`。
 - `probe_lead_seconds`：`state_aware` 模式下，在 state 过期前提前多少秒开始探测。默认 `300`。
 - `target_state_length`：只缓存指定长度的 state。默认 `292`。
-- `accepted_blocks`：按 Fernet 密文块数接受的 state 类型。默认 `[10, 12]`：`10` 对应 Pro/Plus（292），`12` 对应 Team（332）；`11`/`13` 等异常态拒绝。合法 Fernet 优先按块数判断，非 Fernet 退回 `target_state_length`。
+- `accepted_blocks`：按 Fernet 密文块数接受的 state 形态。默认 `[10, 11, 12]`：`10`≈292（gpt-5.5 时代）、`11`≈312（gpt-5.6 / gpt-6 系列）、`12`≈332（Team/企业），其余形态拒绝。合法 Fernet 优先按块数判断，非 Fernet 退回 `target_state_length`。若探测开始报 `turn state rejected (length …, blocks …)`，状态页会直接回显实收长度与块数，把它加进这一项即可；填 `[10, 12]` 可退回 0.5.2 之前的严格行为。
 - `ttl_seconds`：缓存可用于注入的最长时间。默认 `3600`。
 - `inject`：向后续匹配请求注入缓存。默认 `true`。
 - `harvest`：从正常 Codex 流量采集。默认 `true`。
 - `probe`：启用后台轮换代理探测。默认 `true`。
-- `direct_probe`：每个账号+模型在代理尝试前先执行不使用代理的基线请求；基线命中目标长度时会写入缓存并结束该轮。默认 `false`。
+- `direct_probe`：每个账号+模型在代理尝试前先执行不使用代理的直连请求；命中目标形态时会写入缓存并结束该轮。默认 `false`。配合空代理池即为「只用直连探测」——0.5.2 之前代理池为空会整轮跳过。
 - `show_state_values`：在状态页和 JSON 日志中保留并显示之后捕获到的完整 state。默认 `false`；只应在受保护的管理入口启用。
 - `probe_log_limit`：内存中保留的探测日志条数。默认 `200`，最大 `1000`。
 - `max_probe_attempts`：每轮中每个账号+模型最多尝试次数。默认 `3`。
@@ -163,6 +164,20 @@ us.rrp.bestgo.work:10000:USER-zone-custom-region-US:password
 
 缓存 state、探测日志、注入记录和上述计数器也会持久化到插件数据目录的 `runtime.json`，更新或重载插件后仍会恢复；此前版本升级前丢失的内存记录无法找回。
 
+## 排错：状态页显示“操作失败，请查看本地插件日志”
+
+这句是**兜底文案**，只在插件无法安全地把原始错误回显到页面上时出现。0.5.2 起，插件自己产生的错误会直接写明原因，常见的有：
+
+| 页面提示 | 含义与处理 |
+| --- | --- |
+| 未配置代理，且 direct_probe 未开启 | 探测需要一个出口。填代理，或把 `direct_probe` 设为 true 用直连探测。 |
+| 代理配置里没有一条能解析 | 逐行填 `host:port:user:password`（账号密码可省略），或直接粘贴 JSON 数组。写错的行会被跳过并记日志，日志里能看到第几行。 |
+| 上游返回的 state 未被接受（长度 … / 块 …） | 上游换了 state 形态。把回显的块数加进 `accepted_blocks`（默认已含 10/11/12）。 |
+| 探测出口连接失败 | 代理本身不通、被限流或协议选错（BestGo 这类 SOCKS5 节点需要把 `proxy_scheme` 设为 `socks5`）。具体出口与原因见日志。 |
+| 上游返回 HTTP 4xx/5xx | 上游拒绝：额度、封控或凭据失效。对应账号会按 `error_aware_backoff` / `quota_backoff_seconds` 退避。 |
+
+日志入口：CPA 日志页，或 `<CPA 运行目录>/logs/main.log`，搜 `codex-turn-state`。探测尝试失败现在会逐次记录 `route` / `proxy_index` / `attempt` / `error`（代理凭据已打码）。
+
 ## 本地构建与验证
 
 ```bash
@@ -179,7 +194,7 @@ macOS 使用 `.dylib`，Linux 使用 `.so`，Windows 使用 `.dll`。推送 `v*`
 ## 注意事项
 
 - 主动探测需要 CPA host API 可读取的文件型 Codex 凭据。仅存在于运行时的凭据不能直接探测，但仍可参与正常流量采集和注入。
-- 开启 `direct_probe` 后，页面会先记录一次 `direct` 直连基线，再记录每一次实际发生的 `proxy` 尝试；每次代理尝试都会创建独立 uTLS HTTP/2 连接。
+- 开启 `direct_probe` 后，页面会先记录一次 `direct` 直连尝试（命中即缓存并结束该轮），再记录实际发生的 `proxy` 尝试；每次代理尝试都会创建独立 uTLS HTTP/2 连接。代理池留空且开启 `direct_probe` 时即为只用直连探测。
 - 发现 state 后会立即停止读取并关闭连接；最终计费和用量仍由上游决定。
 - 不要设置过短的探测间隔，并遵守上游和代理服务条款。
 - state 是不透明的上游数据；长度符合要求不等于一定有效，也不保证任何路由、容量或账号效果。

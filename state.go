@@ -68,7 +68,7 @@ func (c *stateCache) configureAcceptedBlocks(blocks []int) {
 
 func acceptedState(state string, targetLength int, acceptedBlocks []int, fallbackLength bool) bool {
 	if len(acceptedBlocks) == 0 {
-		acceptedBlocks = []int{10, 12}
+		acceptedBlocks = defaultAcceptedBlocksList()
 	}
 	blocks, okBlocks := parseStateBlocks(state)
 	if okBlocks {
@@ -272,7 +272,7 @@ func makeCacheKey(authID, model string) cacheKey {
 
 func normalizedBlocks(blocks []int) []int {
 	if len(blocks) == 0 {
-		return []int{10, 12}
+		return defaultAcceptedBlocksList()
 	}
 	return blocks
 }

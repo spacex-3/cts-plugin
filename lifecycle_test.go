@@ -77,28 +77,34 @@ func TestFernetFreshnessAndValidation(t *testing.T) {
 	}
 }
 
-func TestAcceptedBlocksCoversProAndTeam(t *testing.T) {
+func TestAcceptedBlocksCoversProNewEraAndTeam(t *testing.T) {
 	now := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
-	pro := syntheticState(now)
-	raw := make([]byte, 57+192)
-	raw[0] = 0x80
-	binary.BigEndian.PutUint64(raw[1:9], uint64(now.Unix()))
-	teamState := base64.URLEncoding.EncodeToString(raw)
+	build := func(blocks int) string {
+		raw := make([]byte, 57+blocks*16)
+		raw[0] = 0x80
+		binary.BigEndian.PutUint64(raw[1:9], uint64(now.Unix()))
+		return base64.URLEncoding.EncodeToString(raw)
+	}
 
 	cache := newStateCache(time.Hour, 292, func() time.Time { return now })
-	if !cache.putIfTarget("a", "pro", pro, "probe") {
-		t.Fatal("Pro 10-block state should be accepted by default")
+	for name, blocks := range map[string]int{"pro": 10, "gpt-5.6-6": 11, "team": 12} {
+		if !cache.putIfTarget("a", name, build(blocks), "probe") {
+			t.Fatalf("%d-block state should be accepted by default", blocks)
+		}
 	}
-	if !cache.putIfTarget("a", "team", teamState, "probe") {
-		t.Fatal("Team 12-block state should be accepted by default")
+	for _, blocks := range []int{9, 13} {
+		if cache.putIfTarget("a", "bad", build(blocks), "probe") {
+			t.Fatalf("%d-block state should be rejected by default", blocks)
+		}
 	}
 
-	anomaly := make([]byte, 57+176)
-	anomaly[0] = 0x80
-	binary.BigEndian.PutUint64(anomaly[1:9], uint64(now.Unix()))
-	anomalyState := base64.URLEncoding.EncodeToString(anomaly)
-	if cache.putIfTarget("a", "bad", anomalyState, "probe") {
-		t.Fatal("11-block anomaly should be rejected")
+	// An explicit list still wins over the default.
+	explicit := pluginConfig{AcceptedBlocks: []int{10, 12}}
+	if explicit.stateAccepted(build(11)) {
+		t.Fatal("explicit accepted_blocks [10,12] must still reject 11 blocks")
+	}
+	if !explicit.stateAccepted(build(10)) || !explicit.stateAccepted(build(12)) {
+		t.Fatal("explicit accepted_blocks [10,12] must accept 10 and 12 blocks")
 	}
 }
 

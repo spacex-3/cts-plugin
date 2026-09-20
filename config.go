@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strconv"
 	"strings"
 	"time"
 )
@@ -30,8 +31,14 @@ const (
 )
 
 var (
-	pluginVersion      = "0.5.1"
+	pluginVersion      = "0.5.2"
 	defaultProbeModels = []string{"gpt-5.6-sol", "gpt-6-astra"}
+
+	// Fernet envelope block counts accepted as a full-strength turn state:
+	// 10 blocks = 292 bytes (gpt-5.5 era), 11 = 312 (gpt-5.6 / gpt-6 era),
+	// 12 = 332 (Team / business plans). Upstream still changes this shape, so
+	// accepted_blocks stays configurable.
+	defaultAcceptedBlocks = []int{10, 11, 12}
 )
 
 type pluginConfig struct {
@@ -121,10 +128,11 @@ func (c pluginConfig) targetLength() int {
 	return c.TargetStateLength
 }
 
+func defaultAcceptedBlocksList() []int {
+	return append([]int(nil), defaultAcceptedBlocks...)
+}
+
 func (c pluginConfig) acceptedBlocks() []int {
-	if len(c.AcceptedBlocks) == 0 {
-		return []int{10, 12}
-	}
 	out := make([]int, 0, len(c.AcceptedBlocks))
 	for _, block := range c.AcceptedBlocks {
 		if block > 0 {
@@ -132,9 +140,18 @@ func (c pluginConfig) acceptedBlocks() []int {
 		}
 	}
 	if len(out) == 0 {
-		return []int{10, 12}
+		return defaultAcceptedBlocksList()
 	}
 	return out
+}
+
+func (c pluginConfig) acceptedBlocksText() string {
+	blocks := c.acceptedBlocks()
+	parts := make([]string, 0, len(blocks))
+	for _, block := range blocks {
+		parts = append(parts, strconv.Itoa(block))
+	}
+	return strings.Join(parts, "/")
 }
 
 func (c pluginConfig) stateAccepted(state string) bool {

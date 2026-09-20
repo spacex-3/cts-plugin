@@ -217,3 +217,30 @@ func TestHostedKeyDecodesPanelVariants(t *testing.T) {
 		t.Fatal("login shell should decode v1 and v2 panel values")
 	}
 }
+
+func TestVisibleStatusErrorExplainsPluginRaisedFailures(t *testing.T) {
+	cases := map[string]string{
+		probeErrorNoProxyConfigured:                       "未配置代理",
+		probeErrorNoUsableProxy + ": line 1: bad":         "没有一条能解析",
+		"no matching Codex credentials":                   "Codex 账号",
+		"turn state rejected (length 312, blocks 11)":     "长度 312 / 块 11",
+		"probe status 403: forbidden":                     "HTTP 403",
+		"probe request: utls: dial upstream: i/o timeout": "出口连接失败",
+		"build probe proxy: unsupported proxy scheme":     "出口连接失败",
+	}
+	for raw, want := range cases {
+		got := visibleStatusError(raw)
+		if !strings.Contains(got, want) {
+			t.Errorf("visibleStatusError(%q) = %q, want it to mention %q", raw, got, want)
+		}
+		if strings.Contains(got, "inspect local plugin logs") {
+			t.Errorf("visibleStatusError(%q) fell back to the generic message", raw)
+		}
+	}
+	if got := visibleStatusError("usage_limit_reached"); !strings.Contains(got, "quota") {
+		t.Errorf("quota error = %q", got)
+	}
+	if got := visibleStatusError("account token-abc failed: bearer-secret"); strings.Contains(got, "bearer-secret") {
+		t.Errorf("raw upstream text leaked: %q", got)
+	}
+}

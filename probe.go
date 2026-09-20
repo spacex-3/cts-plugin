@@ -14,6 +14,13 @@ import (
 	"github.com/tidwall/gjson"
 )
 
+// Global probe errors the status page maps back to readable advice. The prefixes
+// are stable so status_security.go can classify them without echoing raw text.
+const (
+	probeErrorNoProxyConfigured = "proxy config missing: no proxy entry and direct_probe is off"
+	probeErrorNoUsableProxy     = "proxy config invalid: no proxy entry could be parsed"
+)
+
 type probeTransport interface {
 	Do(ctx context.Context, proxyURL string, req *http.Request) (*http.Response, error)
 }
@@ -187,16 +194,22 @@ func (rt *pluginRuntime) prepareProbe(cfg pluginConfig) ([]probeTarget, []string
 		rt.setGlobalProbeError("no matching Codex credentials")
 		return nil, nil, false
 	}
-	proxies, errProxy := parseProxyURLsWithScheme(strings.Join(cfg.proxyLines(), "\n"), cfg.proxyScheme())
-	if errProxy != nil {
-		rt.host.Log("warn", "codex-turn-state: invalid probe proxy", map[string]any{"error": errProxy.Error()})
-		rt.setGlobalProbeError(errProxy.Error())
+	proxies, issues := parseProxyURLsTolerant(strings.Join(cfg.proxyLines(), "\n"), cfg.proxyScheme())
+	for _, issue := range issues {
+		rt.host.Log("warn", "codex-turn-state: skipped unparsable proxy entry", map[string]any{"detail": issue})
+	}
+	if len(proxies) == 0 && !cfg.directProbeEnabled() {
+		if len(issues) > 0 {
+			rt.host.Log("warn", "codex-turn-state: probe skipped because no proxy entry could be parsed", map[string]any{"skipped": len(issues)})
+			rt.setGlobalProbeError(probeErrorNoUsableProxy + ": " + strings.Join(issues, "; "))
+			return nil, nil, false
+		}
+		rt.host.Log("info", "codex-turn-state: probe skipped because proxy is empty and direct_probe is off", nil)
+		rt.setGlobalProbeError(probeErrorNoProxyConfigured)
 		return nil, nil, false
 	}
 	if len(proxies) == 0 {
-		rt.host.Log("info", "codex-turn-state: probe skipped because proxy is empty", nil)
-		rt.setGlobalProbeError("at least one proxy is required for probing")
-		return nil, nil, false
+		rt.host.Log("info", "codex-turn-state: probing direct only (no proxy configured)", map[string]any{"targets": len(targets)})
 	}
 	rt.setGlobalProbeError("")
 	return targets, proxies, true
@@ -239,6 +252,13 @@ func (rt *pluginRuntime) probeTargetOnce(ctx context.Context, target probeTarget
 			state, errProbe := rt.probeOnce(ctx, "", target, cfg)
 			if errProbe != nil {
 				rt.recordProbeAttempt(target, "direct", attempt, "", false, false, errProbe.Error())
+				rt.host.Log("info", "codex-turn-state: direct probe attempt failed", map[string]any{
+					"auth_id": target.AuthID,
+					"model":   target.Model,
+					"route":   "direct",
+					"attempt": attempt,
+					"error":   sanitizeErrorText(errProbe.Error()),
+				})
 				if rt.stopForQuota(target.AuthID, cfg, errProbe) {
 					return
 				}
@@ -292,6 +312,15 @@ func (rt *pluginRuntime) probeTargetWithProxies(ctx context.Context, proxies []s
 			lastErr = errProbe
 			rt.recordProbe(target, "", false, errProbe.Error())
 			rt.recordProbeAttemptWithProxy(target, "proxy", proxyLabel, attempt, "", false, false, errProbe.Error())
+			rt.host.Log("info", "codex-turn-state: probe attempt failed", map[string]any{
+				"auth_id":     target.AuthID,
+				"model":       target.Model,
+				"route":       "proxy",
+				"proxy":       proxyLabel,
+				"proxy_index": proxyIndex + 1,
+				"attempt":     attempt,
+				"error":       sanitizeErrorText(errProbe.Error()),
+			})
 			if rt.stopForQuota(target.AuthID, cfg, errProbe) {
 				return
 			}

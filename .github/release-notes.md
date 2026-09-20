@@ -1,4 +1,18 @@
-Report what turn-state injection actually does per account, and let one probe egress retry before the rotation moves on.
+Let an empty proxy pool mean "direct only", and stop hiding why a probe failed.
+
+## Fixed in v0.5.2
+
+- Probing no longer requires a proxy pool: with `direct_probe: true` and no proxies, the round now runs direct-only. Before this, an empty pool skipped probing entirely with `at least one proxy is required for probing`.
+- One unparsable proxy line no longer aborts the whole round. Valid entries keep working, skipped entries are logged with their line number, and the round is only skipped when nothing is usable.
+- Pasting a JSON array (the shape the config editor uses for `proxies`) into the legacy `proxy` string field now works instead of failing with `proxy must be [host]:port:user:password`.
+- Proxy entries without credentials are accepted: `host:port` and `host:port:user` are valid next to `host:port:user:password`, and passwords may contain colons.
+- `accepted_blocks` now defaults to `[10, 11, 12]`. `11` blocks ≈ 312 characters is the current full-strength shape for the gpt-5.6 / gpt-6 era, so the previous `[10, 12]` default rejected every probe against those models. Set `[10, 12]` to restore the stricter behaviour.
+
+## Added in v0.5.2
+
+- The status page explains plugin-raised failures instead of the generic "Operation failed; inspect local plugin logs for details": missing/unusable proxy configuration, unreachable egress, upstream HTTP status, and rejected state shapes (with the received length and block count) each get their own message.
+- Every failed probe attempt is written to the log with `route`, `proxy_index`, `attempt`, and the error, with proxy credentials redacted, so a failing egress can be identified without guessing.
+- The status page shows the accepted block counts as its own chip (also `accepted_blocks` in the JSON view).
 
 ## Fixed in v0.5.1
 

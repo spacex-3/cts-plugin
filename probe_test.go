@@ -201,6 +201,115 @@ func TestListProbeTargetsUsesRuntimeAuthIDAndIncludesUnavailable(t *testing.T) {
 	}
 }
 
+func probeConfigRuntime(t *testing.T, cfg pluginConfig) *pluginRuntime {
+	t.Helper()
+	testRuntime := newRuntime()
+	testRuntime.config = normalizeConfig(cfg)
+	testRuntime.host = &targetListHost{
+		files: []pluginapi.HostAuthFileEntry{{ID: "auth-1", AuthIndex: "index-1", Provider: "codex"}},
+		auths: map[string]pluginapi.HostAuthGetResponse{
+			"index-1": {JSON: json.RawMessage(`{"access_token":"token-1"}`)},
+		},
+	}
+	testRuntime.cache = newStateCache(time.Hour, 292, time.Now)
+	return testRuntime
+}
+
+func TestPrepareProbeAllowsDirectOnlyWithoutProxies(t *testing.T) {
+	probe, direct := true, true
+	testRuntime := probeConfigRuntime(t, pluginConfig{
+		Models:      []string{"model-1"},
+		Probe:       &probe,
+		DirectProbe: &direct,
+		Proxies:     []string{},
+	})
+	targets, proxies, ok := testRuntime.prepareProbe(testRuntime.configSnapshot())
+	if !ok {
+		t.Fatal("direct-only probing should run with an empty proxy pool")
+	}
+	if len(targets) != 1 {
+		t.Fatalf("targets = %d, want 1", len(targets))
+	}
+	if len(proxies) != 0 {
+		t.Fatalf("proxies = %v, want none", proxies)
+	}
+	if got := testRuntime.snapshotStatus().GlobalErr; got != "" {
+		t.Fatalf("global error = %q, want empty", got)
+	}
+}
+
+func TestPrepareProbeExplainsEmptyProxyPool(t *testing.T) {
+	probe := true
+	testRuntime := probeConfigRuntime(t, pluginConfig{
+		Models:  []string{"model-1"},
+		Probe:   &probe,
+		Proxies: []string{},
+	})
+	if _, _, ok := testRuntime.prepareProbe(testRuntime.configSnapshot()); ok {
+		t.Fatal("probing without proxies and without direct_probe should be skipped")
+	}
+	if got := testRuntime.snapshotStatus().GlobalErr; !strings.HasPrefix(got, probeErrorNoProxyConfigured) {
+		t.Fatalf("global error = %q, want the no-proxy marker", got)
+	}
+}
+
+func TestPrepareProbeKeepsUsableProxiesWhenOneEntryIsBad(t *testing.T) {
+	probe := true
+	testRuntime := probeConfigRuntime(t, pluginConfig{
+		Models:  []string{"model-1"},
+		Probe:   &probe,
+		Proxies: []string{"us.example:10000:user:pw", "this-is-not-a-proxy"},
+	})
+	_, proxies, ok := testRuntime.prepareProbe(testRuntime.configSnapshot())
+	if !ok {
+		t.Fatal("one bad entry should not disable the whole round")
+	}
+	if len(proxies) != 1 || !strings.Contains(proxies[0], "us.example:10000") {
+		t.Fatalf("proxies = %v, want the single usable entry", proxies)
+	}
+	if got := testRuntime.snapshotStatus().GlobalErr; got != "" {
+		t.Fatalf("global error = %q, want empty", got)
+	}
+}
+
+func TestPrepareProbeRejectsUnparsableProxyPool(t *testing.T) {
+	probe := true
+	testRuntime := probeConfigRuntime(t, pluginConfig{
+		Models:  []string{"model-1"},
+		Probe:   &probe,
+		Proxies: []string{"this-is-not-a-proxy"},
+	})
+	if _, _, ok := testRuntime.prepareProbe(testRuntime.configSnapshot()); ok {
+		t.Fatal("a proxy pool with no usable entry should skip probing")
+	}
+	if got := testRuntime.snapshotStatus().GlobalErr; !strings.HasPrefix(got, probeErrorNoUsableProxy) {
+		t.Fatalf("global error = %q, want the unusable-proxy marker", got)
+	}
+}
+
+func TestProbeTargetOnceProbesDirectOnlyWithoutProxies(t *testing.T) {
+	probe, direct := true, true
+	transport := &sequenceProbeTransport{states: []string{strings.Repeat("a", 292)}}
+	testRuntime := probeConfigRuntime(t, pluginConfig{
+		Models:            []string{"model-1"},
+		Probe:             &probe,
+		DirectProbe:       &direct,
+		TargetStateLength: 292,
+	})
+	testRuntime.transport = transport
+	target := probeTarget{AuthID: "auth-1", Model: "model-1", Token: "token", BaseURL: "https://example.test/backend-api/codex"}
+	testRuntime.probeTargetOnce(context.Background(), target, testRuntime.configSnapshot(), nil)
+	if transport.calls != 1 {
+		t.Fatalf("probe calls = %d, want 1", transport.calls)
+	}
+	if len(transport.proxies) != 1 || transport.proxies[0] != "" {
+		t.Fatalf("probe egresses = %v, want a single direct attempt", transport.proxies)
+	}
+	if _, ok := testRuntime.cache.lookup("auth-1", "model-1"); !ok {
+		t.Fatal("direct-only probe should have cached the state")
+	}
+}
+
 func TestListProbeTargetsDoesNotTreatLabelsAsAuthIDs(t *testing.T) {
 	probe := false
 	host := &targetListHost{

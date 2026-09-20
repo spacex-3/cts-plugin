@@ -27,9 +27,27 @@ func TestParseProxyURLIPv6(t *testing.T) {
 	}
 }
 
+func TestParseProxyURLAcceptsCredentialFreeValue(t *testing.T) {
+	for raw, want := range map[string]string{
+		"proxy.example:8080":              "http://proxy.example:8080",
+		"proxy.example:8080:user":         "http://user@proxy.example:8080",
+		"proxy.example:8080:user:pw:more": "http://user:pw%3Amore@proxy.example:8080",
+	} {
+		got, errParse := parseProxyURL(raw)
+		if errParse != nil {
+			t.Fatalf("parse %q: %v", raw, errParse)
+		}
+		if got != want {
+			t.Fatalf("parse %q = %q, want %q", raw, got, want)
+		}
+	}
+}
+
 func TestParseProxyURLRejectsIncompleteValue(t *testing.T) {
-	if _, errParse := parseProxyURL("proxy.example:8080"); errParse == nil {
-		t.Fatal("expected incomplete proxy value to fail")
+	for _, raw := range []string{"proxy.example", ":8080", "proxy.example:"} {
+		if _, errParse := parseProxyURL(raw); errParse == nil {
+			t.Fatalf("expected %q to fail", raw)
+		}
 	}
 }
 
@@ -94,6 +112,74 @@ func TestParseProxyURLsSplitsLines(t *testing.T) {
 	}
 	if got[0] != "http://user:pass@proxy-one.example:8080" || got[1] != "socks5://user:pass@proxy-two.example:1080" {
 		t.Fatalf("proxies = %#v", got)
+	}
+}
+
+func TestParseProxyURLsAcceptsJSONArrayInput(t *testing.T) {
+	jsonArray := `["us.rrp.example:10000:user-a:pw","us2.rrp.example:10000:user-b:pw"]`
+	want := []string{
+		"http://user-a:pw@us.rrp.example:10000",
+		"http://user-b:pw@us2.rrp.example:10000",
+	}
+	for name, raw := range map[string]string{
+		"whole input":  jsonArray,
+		"single line":  jsonArray,
+		"with newline": jsonArray + "\n",
+	} {
+		got, errParse := parseProxyURLsWithScheme(raw, "http")
+		if errParse != nil {
+			t.Fatalf("%s: %v", name, errParse)
+		}
+		if len(got) != len(want) {
+			t.Fatalf("%s: got %v, want %v", name, got, want)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("%s: got %v, want %v", name, got, want)
+			}
+		}
+	}
+
+	empty, errEmpty := parseProxyURLsWithScheme("[]", "http")
+	if errEmpty != nil || len(empty) != 0 {
+		t.Fatalf("empty array = %v err=%v", empty, errEmpty)
+	}
+
+	// A JSON array inside the legacy single-line string field used to fail
+	// with "proxy must be [host]:port:user:password" because of the leading '['.
+	lines := pluginConfig{Proxy: jsonArray}.proxyLines()
+	if _, errLegacy := parseProxyURLsWithScheme(strings.Join(lines, "\n"), "http"); errLegacy != nil {
+		t.Fatalf("legacy proxy field with a JSON array: %v", errLegacy)
+	}
+}
+
+func TestParseProxyURLsTolerantSkipsBadLines(t *testing.T) {
+	raw := strings.Join([]string{
+		"us.rrp.example:10000:user:pw",
+		"[{\"not\":\"a proxy\"}]",
+		"us2.rrp.example:10000:user:pw",
+	}, "\n")
+	proxies, issues := parseProxyURLsTolerant(raw, "http")
+	if len(proxies) != 2 {
+		t.Fatalf("proxies = %v, want 2 entries", proxies)
+	}
+	if len(issues) != 1 || !strings.Contains(issues[0], "line 2") {
+		t.Fatalf("issues = %v, want one entry for line 2", issues)
+	}
+
+	// The strict variant still refuses the whole blob.
+	if _, errStrict := parseProxyURLsWithScheme(raw, "http"); errStrict == nil {
+		t.Fatal("expected the strict parser to reject the blob")
+	}
+}
+
+func TestSanitizeErrorTextHidesProxyCredentials(t *testing.T) {
+	got := sanitizeErrorText("utls: dial upstream: proxyconnect tcp: dial http://user:secret@proxy.example:8080: i/o timeout")
+	if strings.Contains(got, "secret") || strings.Contains(got, "user:") {
+		t.Fatalf("credentials leaked: %q", got)
+	}
+	if !strings.Contains(got, "i/o timeout") {
+		t.Fatalf("reason was dropped: %q", got)
 	}
 }
 

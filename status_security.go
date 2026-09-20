@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 )
 
@@ -108,11 +109,36 @@ func visibleInjectionHeaders(raw string, cfg pluginConfig) string {
 	return string(out)
 }
 
+var stateRejectedPattern = regexp.MustCompile(`turn state rejected \(length (\d+), blocks ([^)]+)\)`)
+
 // Upstream and transport errors can echo credentials, states or account names.
 // Keep detailed errors in local logs instead of copying arbitrary text to HTTP.
+// Errors the plugin raises itself (config, egress, state shape) carry no secrets,
+// so they are translated into readable advice instead of the generic fallback.
 func visibleStatusError(raw string) string {
 	if raw == "" {
 		return ""
+	}
+	if strings.HasPrefix(raw, probeErrorNoProxyConfigured) {
+		return "未配置代理，且 direct_probe 未开启：探测需要至少一条代理，或开启 direct_probe 只用直连。"
+	}
+	if strings.HasPrefix(raw, probeErrorNoUsableProxy) {
+		return "代理配置里没有一条能解析：请每行填 host:port:user:password（也可 port 后省略账号，或用 http(s)/socks5 URL、JSON 数组）。"
+	}
+	if strings.Contains(raw, "no matching Codex credentials") {
+		return "没有可用的 Codex 账号：请检查 auth_ids / models 与账号是否启用。"
+	}
+	if strings.Contains(raw, "invalid probe proxy") || strings.Contains(raw, "proxy line ") {
+		return "代理配置无法解析：请检查格式（host:port:user:password、URL 或 JSON 数组）。"
+	}
+	if rejected := stateRejectedPattern.FindStringSubmatch(raw); rejected != nil {
+		return "上游返回的 state 未被接受（长度 " + rejected[1] + " / 块 " + rejected[2] + "）：请检查 accepted_blocks（或 target_state_length）是否放行该形态。"
+	}
+	if match := probeStatusPattern.FindStringSubmatch(raw); match != nil {
+		return "上游返回 HTTP " + match[1] + "：详情见本地日志。"
+	}
+	if isEgressError(raw) {
+		return "探测出口连接失败（代理不通、TLS 或网络问题）：出口与原因见本地日志。"
 	}
 	switch classifyFailure(0, raw) {
 	case failureQuota:
@@ -122,6 +148,29 @@ func visibleStatusError(raw string) string {
 	default:
 		return "Operation failed; inspect local plugin logs for details."
 	}
+}
+
+var probeStatusPattern = regexp.MustCompile(`probe status (\d{3})`)
+
+// Connection-level failures: the proxy or the network never reached upstream.
+func isEgressError(raw string) bool {
+	for _, marker := range []string{
+		"utls: dial upstream",
+		"utls: TLS handshake",
+		"utls: initialize HTTP/2",
+		"proxyconnect",
+		"build probe proxy",
+		"probe request:",
+		"dial tcp",
+		"i/o timeout",
+		"connection refused",
+		"no such host",
+	} {
+		if strings.Contains(raw, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // Public resource: static content only. The management key lives in this page's

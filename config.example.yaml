@@ -6,7 +6,8 @@ plugins:
     codex-turn-state:
       enabled: true
       priority: 100
-      # 兼容单行/多行字符串；建议使用下面的 proxies 列表，管理页更直观。
+      # 兼容单行/多行字符串（也可直接粘贴 JSON 数组）；建议使用下面的 proxies 列表，管理页更直观。
+      # 每行一条：host:port:user:password，账号密码可省略（host:port），也可写 socks5://user:pw@host:port。
       proxy: "proxy.example:8080:username:password"
       # proxies:
       #   - "proxy-one.example:8080:user:pass"
@@ -33,11 +34,14 @@ plugins:
       quota_backoff_seconds: 900
       rotate_proxy_start: false
       target_state_length: 292
-      accepted_blocks: [10, 12]
+      # 10≈292（gpt-5.5 时代）、11≈312（gpt-5.6 / gpt-6 系列）、12≈332（Team/企业）。
+      # 探测被拒时状态页会回显实收块数，把它加进来即可；想严格一点可填 [10, 12]。
+      accepted_blocks: [10, 11, 12]
       ttl_seconds: 3600
       inject: true
       harvest: true
       probe: true
+      # 直连探测；配合空代理池即为「只用直连探测」。
       direct_probe: true
       show_state_values: false
       show_account_details: false

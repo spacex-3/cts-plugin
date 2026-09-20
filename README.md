@@ -22,7 +22,7 @@ Then add the plugin configuration shown in [`config.example.yaml`](config.exampl
 - Optionally records a direct, no-proxy baseline and then sends minimal streaming Codex requests through a rotating proxy.
 - Uses a dedicated uTLS HTTP/2 connection for every probe attempt.
 - Stops reading and closes the connection immediately after finding turn-state metadata.
-- Accepts only states matching `target_state_length` (default: `292`).
+- Accepts only states whose Fernet block count is allowed (`accepted_blocks`, default `[10, 11, 12]` ≈ 292/312/332); non-Fernet states fall back to `target_state_length` (default: `292`).
 - Harvests matching state from regular HTTP, SSE, and WebSocket Codex responses.
 - Caches state in memory by exact runtime auth ID plus resolved model.
 - Replaces `X-Codex-Turn-State` on later matching requests while the state is within `ttl_seconds` (default: one hour).
@@ -67,7 +67,8 @@ plugins:
 ### Fields
 
 - `proxy`: one or more rotating proxy endpoints, one per line. Supports `host:port:user:password`, provider-style `socks5://host:port:user:password`, and standard `socks5://user:password@host:port` / HTTP(S) URLs. Credentials are URL-encoded internally; bracket IPv6 literals. A nonmatching state advances to the next proxy on the following attempt.
-- `proxies`: recommended list form for multiple proxies, one item per entry. It is merged with `proxy`; use this in the CPA plugin config UI when the `proxy` string field collapses pasted newlines.
+- `proxies`: recommended list form for multiple proxies, one item per entry. It is merged with `proxy`; use this in the CPA plugin config UI when the `proxy` string field collapses pasted newlines. Pasting a JSON array into `proxy` works too.
+- Proxy entry format: `host:port:user:password` (credentials optional, so `host:port` is fine), `scheme://user:password@host:port`, or a plain `host:port:user:password` line prefixed with the scheme. One entry per line; a single unparsable entry is skipped with a log line instead of aborting the round.
 - `proxy_scheme`: default protocol for `proxy`/`proxies` entries that omit a scheme. Choose `http` or `socks5`; the latter is required for SOCKS5-only providers such as BestGo. Default: `http`.
 - `auth_ids`: exact Codex runtime auth IDs. Empty permits every Codex auth visible to the host.
 - `probe_auth_ids`: auth IDs that may be probed. Empty probes every auth in the `auth_ids` scope; the status page also supports per-account selection.
@@ -76,12 +77,12 @@ plugins:
 - `probe_schedule`: `fixed` probes on a constant interval; `state_aware` skips periodic probes while a fresh state is cached and only resumes shortly before expiry. Default: `fixed`.
 - `probe_lead_seconds`: lead time before state expiry used by `state_aware`. Default: `300`.
 - `target_state_length`: required state length. Default: `292`.
-- `accepted_blocks`: accepted Fernet ciphertext block counts. Default: `[10, 12]`; `10` covers Pro/Plus (292) and `12` covers Team (332). Anomalous `11`/`13` blocks are rejected. Valid Fernet states use block count first; non-Fernet states fall back to `target_state_length`.
+- `accepted_blocks`: accepted Fernet ciphertext block counts. Default: `[10, 11, 12]`; `10` ≈ 292 characters (gpt-5.5 era), `11` ≈ 312 (gpt-5.6 / gpt-6 era), `12` ≈ 332 (Team/business). Other shapes are rejected. Valid Fernet states use block count first; non-Fernet states fall back to `target_state_length`. If probes start failing with `turn state rejected (length …, blocks …)`, the status page now shows the received shape so you can add it here. Set `[10, 12]` to keep the stricter pre-0.5.2 behaviour.
 - `ttl_seconds`: maximum cache age for injection. Default: `3600`.
 - `inject`: inject fresh cached state into matching requests. Default: `true`.
 - `harvest`: collect matching state from normal Codex traffic. Default: `true`.
 - `probe`: run background probes. Default: `true`.
-- `direct_probe`: send a no-proxy baseline request before proxy attempts for each auth/model; an accepted baseline is cached and ends the round. Default: `false`.
+- `direct_probe`: send a no-proxy request before the proxy attempts for each auth/model; an accepted result is cached and ends the round. Default: `false`. Combined with an empty proxy pool this becomes direct-only probing — before 0.5.2 an empty pool skipped probing entirely.
 - `show_state_values`: display and retain future full state values in the status page/JSON probe log. Default: `false`; enable only on a protected management endpoint.
 - `probe_log_limit`: maximum in-memory attempt records. Default: `200`, maximum: `1000`.
 - `max_probe_attempts`: attempts per auth/model in one cycle. Default: `3`.
@@ -140,6 +141,20 @@ contains usable state with the existing owner-only file permissions. This change
 does not encrypt local storage.
 
 The page shows account cards at the top with a stable per-account color, current state length, live countdown, and requests/successes/total tokens/average TTFT for the current state window, followed by recent probe results and every proxy attempt. Each card also counts four things the state value cannot show: `已注入` (requests that carried a cached ticket), `裸发` (requests that passed every gate but left with no state), `回票相同` (harvested responses that handed back the exact ticket already held) and `换票` (responses that carried a different one). A non-zero `裸发` means injection is silently failing; mostly `回票相同` means the upstream returns the ticket it was given, mostly `换票` means it reissues one per turn. Proxy credentials and access tokens are never displayed. Full state values are displayed only when `show_state_values: true`; existing records captured while it was disabled remain hidden.
+
+## Troubleshooting "Operation failed; inspect local plugin logs for details"
+
+That text is the redacted fallback used only when the plugin cannot safely echo the original error to the page. Since 0.5.2 the errors the plugin raises itself are translated instead:
+
+| Page message | Meaning |
+| --- | --- |
+| `未配置代理，且 direct_probe 未开启` | Probing needs an egress. Add a proxy, or enable `direct_probe` for direct-only probing. |
+| `代理配置里没有一条能解析` | Fill one `host:port:user:password` per line (credentials optional) or paste a JSON array. Unparsable lines are skipped and logged with their line number. |
+| `上游返回的 state 未被接受（长度 … / 块 …）` | Upstream changed the state shape. Add the reported block count to `accepted_blocks` (defaults already allow 10/11/12). |
+| `探测出口连接失败` | The proxy is unreachable, throttled, or the scheme is wrong (SOCKS5-only providers such as BestGo need `proxy_scheme: socks5`). See logs for the egress and cause. |
+| `上游返回 HTTP 4xx/5xx` | Upstream rejected the probe; the account backs off per `error_aware_backoff` / `quota_backoff_seconds`. |
+
+Logs live in the CPA log page or `<runtime dir>/logs/main.log`; grep for `codex-turn-state`. Failed probe attempts now log `route` / `proxy_index` / `attempt` / `error` each time, with proxy credentials redacted.
 
 ## Build locally
 
