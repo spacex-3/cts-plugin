@@ -52,6 +52,9 @@ plugins:
       direct_probe: true
       # 票与 Cookie：现在的 292 必须带账号级路由 Cookie 才能持续。
       # 只认 __cflb / __oailb，其余 Cookie 一律不采集、不转发、不显示。
+      # 前提：CPA 只向上游转发固定白名单请求头，Cookie 不在其中，因此每个
+      # Codex 账号 JSON 都需要加一行 "headers": {"Cookie": "$Cookie"}，
+      # 否则注入的 Cookie 会被丢掉（状态页会黄条点名账号）。
       inject_cookies: true
       harvest_cookies: true
       probe_send_cookies: true

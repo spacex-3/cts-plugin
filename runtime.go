@@ -722,7 +722,7 @@ func (r *pluginRuntime) recordInjection(req pluginapi.RequestInterceptRequest, e
 		Length:           entry.Length,
 		Source:           entry.Source,
 		State:            entry.State,
-		Headers:          serializedRequestHeaders(req.Headers, entry.State),
+		Headers:          serializedRequestHeaders(req.Headers, entry.State, injection.Names),
 		CookieNames:      strings.Join(injection.Names, ","),
 		CookieAgeSeconds: durationSeconds(injection.Age),
 	})
@@ -780,10 +780,16 @@ func (r *pluginRuntime) recordBareRequest(authID, model string) {
 	r.persistLocked()
 }
 
-func serializedRequestHeaders(headers http.Header, state string) string {
+func serializedRequestHeaders(headers http.Header, state string, injectedCookies []string) string {
 	out := make(http.Header)
 	if strings.TrimSpace(state) != "" {
 		out.Set(turnStateHeader, strings.TrimSpace(state))
+	}
+	// The Cookie header is written by the plugin, so it is not part of the
+	// inbound request headers. Record that it was attached (values stay redacted)
+	// so the injection log stops looking like cookies were never injected.
+	if len(injectedCookies) > 0 {
+		out.Set("Cookie", "[redacted]")
 	}
 	if headers == nil {
 		raw, _ := json.Marshal(out)

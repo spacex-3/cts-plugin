@@ -145,6 +145,9 @@ type statusInjection struct {
 	AgeSeconds       int     `json:"age_seconds"`
 	CookieNames      string  `json:"cookie_names,omitempty"`
 	CookieAgeSeconds int     `json:"cookie_age_seconds,omitempty"`
+	// CookieHeader mirrors the state column: it shows the Cookie header that was
+	// actually attached to the request, with every value masked.
+	CookieHeader string `json:"cookie_header,omitempty"`
 }
 
 type statusAuth struct {
@@ -155,6 +158,9 @@ type statusAuth struct {
 	Email       string `json:"email,omitempty"`
 	Disabled    bool   `json:"disabled"`
 	Unavailable bool   `json:"unavailable"`
+	// CookieForward reports whether this account lets the plugin-injected
+	// Cookie header reach upstream (see cookie_forward.go).
+	CookieForward cookieForwardState `json:"cookie_forward,omitempty"`
 }
 
 // statusCookie describes a routing cookie without ever exposing its value: the
@@ -175,6 +181,7 @@ type statusAccount struct {
 	Label            string               `json:"label"`
 	Color            string               `json:"color"`
 	ProbeEnabled     bool                 `json:"probe_enabled"`
+	CookieForward    cookieForwardState   `json:"cookie_forward,omitempty"`
 	CookieNames      string               `json:"cookie_names,omitempty"`
 	CookieAgeSeconds int                  `json:"cookie_age_seconds,omitempty"`
 	CookieTTLSeconds int                  `json:"cookie_ttl_seconds,omitempty"`
@@ -506,6 +513,7 @@ func buildStatusView() statusView {
 			AgeSeconds:       durationSeconds(snap.Now.Sub(entry.Time)),
 			CookieNames:      entry.CookieNames,
 			CookieAgeSeconds: entry.CookieAgeSeconds,
+			CookieHeader:     injectedCookieHeader(entry.CookieNames),
 		})
 	}
 	if files, errList := currentRuntime().host.AuthList(); errList != nil {
@@ -518,13 +526,14 @@ func buildStatusView() statusView {
 				continue
 			}
 			view.Auths = append(view.Auths, statusAuth{
-				ID:          file.ID,
-				AuthIndex:   file.AuthIndex,
-				Name:        file.Name,
-				Label:       firstNonEmpty(file.Label, file.Email, file.Name),
-				Email:       file.Email,
-				Disabled:    file.Disabled,
-				Unavailable: file.Unavailable,
+				ID:            file.ID,
+				AuthIndex:     file.AuthIndex,
+				Name:          file.Name,
+				Label:         firstNonEmpty(file.Label, file.Email, file.Name),
+				Email:         file.Email,
+				Disabled:      file.Disabled,
+				Unavailable:   file.Unavailable,
+				CookieForward: currentRuntime().cookieForwardStateFor(file.AuthIndex),
 			})
 		}
 		sort.Slice(view.Auths, func(i, j int) bool {
@@ -576,10 +585,11 @@ func buildAccountCards(auths []statusAuth, models []string, cfg pluginConfig, sn
 			continue
 		}
 		account := statusAccount{
-			AuthID:       auth.ID,
-			Label:        firstNonEmpty(auth.Label, auth.Email, auth.Name, auth.ID),
-			Color:        accountColor(auth.ID),
-			ProbeEnabled: cfg.probeAuthEnabled(auth.ID),
+			AuthID:        auth.ID,
+			Label:         firstNonEmpty(auth.Label, auth.Email, auth.Name, auth.ID),
+			Color:         accountColor(auth.ID),
+			ProbeEnabled:  cfg.probeAuthEnabled(auth.ID),
+			CookieForward: auth.CookieForward,
 		}
 		fillAccountCookies(&account, auth.ID, snap.Now, snap.Cookies, snap.CookieTTL)
 		for _, model := range models {
@@ -729,6 +739,7 @@ func renderStatusPage(view statusView, triggered bool) []byte {
 	out.WriteString(chipHTML("显示 state", boolLabel(view.ShowStateValues)))
 	out.WriteString("</div>")
 	out.WriteString(writeCookieBanner(view))
+	out.WriteString(writeCookieForwardBanner(view))
 	if len(view.ExpiredStates) > 0 {
 		out.WriteString("<div class=\"banner\" style=\"border-left-color:var(--amber);background:var(--amber-bg);color:var(--amber)\">当前没有新的 292 state，以下账号仍在使用上一次成功 state 继续注入，直到拿到新的 292：")
 		for _, entry := range view.ExpiredStates {
@@ -910,7 +921,7 @@ func renderInjectionsFragment(view statusView) string {
 		return out.String()
 	}
 	out.WriteString("<div class=\"section-toolbar\"><button type=\"button\" class=\"section-refresh\" id=\"injection-refresh\">刷新</button></div>")
-	out.WriteString("<table id=\"injection-table\" class=\"fixed-table\"><thead><tr><th style=\"width:11%\">时间</th><th style=\"width:11%\">账号</th><th style=\"width:8%\">模型</th><th style=\"width:6%\">推理强度</th><th style=\"width:9%\">端点</th><th style=\"width:5%\">TPS</th><th style=\"width:6%\">Token</th><th style=\"width:6%\">首字</th><th style=\"width:6%\">延迟</th><th style=\"width:5%\">结果</th><th style=\"width:14%\">State 请求头</th><th style=\"width:8%\">请求头</th><th style=\"width:5%\">来源</th></tr></thead><tbody>")
+	out.WriteString("<table id=\"injection-table\" class=\"fixed-table\"><thead><tr><th style=\"width:9%\">时间</th><th style=\"width:10%\">账号</th><th style=\"width:7%\">模型</th><th style=\"width:6%\">推理强度</th><th style=\"width:9%\">端点</th><th style=\"width:5%\">TPS</th><th style=\"width:6%\">Token</th><th style=\"width:6%\">首字</th><th style=\"width:6%\">延迟</th><th style=\"width:5%\">结果</th><th style=\"width:12%\">State 请求头</th><th style=\"width:10%\">Cookie 请求头</th><th style=\"width:7%\">请求头</th><th style=\"width:5%\">来源</th></tr></thead><tbody>")
 	for _, entry := range view.Injections {
 		out.WriteString("<tr class=\"injection-row\">")
 		writeCell(&out, entry.Time)
@@ -944,6 +955,17 @@ func renderInjectionsFragment(view statusView) string {
 		out.WriteString("\">")
 		out.WriteString(html.EscapeString(truncate(entry.State, 48)))
 		out.WriteString("</code></td>")
+		if entry.CookieHeader == "" {
+			writeCell(&out, "—")
+		} else {
+			out.WriteString("<td><code title=\"")
+			out.WriteString(html.EscapeString(entry.CookieHeader + " · 龄 " + formatDuration(time.Duration(entry.CookieAgeSeconds)*time.Second) + "（值已隐藏）"))
+			out.WriteString("\">")
+			out.WriteString(html.EscapeString(truncate(entry.CookieHeader, 44)))
+			out.WriteString("</code><div class=\"muted\" style=\"font-size:10px\">龄 ")
+			out.WriteString(formatDuration(time.Duration(entry.CookieAgeSeconds) * time.Second))
+			out.WriteString("</div></td>")
+		}
 		out.WriteString("<td><code title=\"")
 		out.WriteString(html.EscapeString(entry.Headers))
 		out.WriteString("\">")
@@ -1004,6 +1026,56 @@ func writeCookieBanner(view statusView) string {
 	return "<div class=\"banner\" style=\"border-left-color:var(--amber);background:var(--amber-bg);color:var(--amber)\">尚未采集到路由 Cookie（" + html.EscapeString(strings.Join(trackedCookieNames, ", ")) + "）。只有 state 被注入时，292 可能只能维持几分钟；正常跑一轮流量后这里会显示 Cookie 的名字与年龄。</div>"
 }
 
+// injectedCookieHeader renders the routing cookies the plugin attached to one
+// request the way the state column renders its ticket: the names are visible so
+// the operator can see injection happen, the values never are.
+func injectedCookieHeader(names string) string {
+	names = strings.TrimSpace(names)
+	if names == "" {
+		return ""
+	}
+	masked := make([]string, 0, 2)
+	for _, name := range strings.Split(names, ",") {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		masked = append(masked, name+"=***")
+	}
+	if len(masked) == 0 {
+		return ""
+	}
+	return strings.Join(masked, "; ")
+}
+
+// writeCookieForwardBanner turns the silent failure mode into a visible one:
+// the plugin can attach a Cookie header to every request and still have CPA drop
+// it, so the page says so instead of letting the operator wonder why the ticket
+// keeps dying.
+func writeCookieForwardBanner(view statusView) string {
+	if !view.InjectCookies {
+		return ""
+	}
+	blocked := make([]string, 0, len(view.Auths))
+	for _, auth := range view.Auths {
+		if auth.Disabled || !auth.CookieForward.cookieForwardNeedsAttention() {
+			continue
+		}
+		blocked = append(blocked, firstNonEmpty(auth.Label, auth.Name, auth.ID))
+	}
+	if len(blocked) == 0 {
+		return ""
+	}
+	sort.Strings(blocked)
+	var out strings.Builder
+	out.WriteString("<div class=\"banner\" style=\"border-left-color:var(--amber);background:var(--amber-bg);color:var(--amber)\">Cookie 注入不会生效（")
+	out.WriteString(html.EscapeString(strings.Join(blocked, "、")))
+	out.WriteString("）：")
+	out.WriteString(cookieForwardHint())
+	out.WriteString("</div>")
+	return out.String()
+}
+
 func writeAccountRow(out *bytes.Buffer, account statusAccount, showState bool) {
 	var requests, successes, failures, tokens int64
 	ttftTotal := 0.0
@@ -1030,6 +1102,18 @@ func writeAccountRow(out *bytes.Buffer, account statusAccount, showState bool) {
 		out.WriteString(formatDuration(time.Duration(account.CookieAgeSeconds) * time.Second))
 		out.WriteString(" · 来源 ")
 		out.WriteString(html.EscapeString(firstNonEmpty(account.CookieSource, "-")))
+		out.WriteString("</div>")
+	}
+	if account.CookieForward != "" {
+		color := "var(--green)"
+		if account.CookieForward.cookieForwardNeedsAttention() {
+			color = "var(--amber)"
+		}
+		out.WriteString("<div style=\"font-size:10.5px;color:" + color + "\">Cookie 转发: ")
+		out.WriteString(html.EscapeString(account.CookieForward.label()))
+		if account.CookieForward == cookieForwardMissing {
+			out.WriteString("（注入的 Cookie 到不了上游）")
+		}
 		out.WriteString("</div>")
 	}
 	out.WriteString("</td>")

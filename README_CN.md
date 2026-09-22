@@ -116,7 +116,7 @@ BestGo 这类 SOCKS5 节点，条目不带协议前缀时记得把 `proxy_scheme
 - `harvest`：从正常 Codex 流量采集。默认 `true`。
 - `probe`：启用后台轮换代理探测。默认 `true`。
 - `direct_probe`：每个账号+模型在代理尝试前先执行不使用代理的直连请求；命中目标形态时会写入缓存并结束该轮。默认 `true`（直连正是实测能打出合格票的出口）；只用代理池时设为 `false`。配合空代理池即为「只用直连探测」——0.5.2 之前代理池为空会整轮跳过。
-- `inject_cookies`：注入 state 的同时注入账号级路由 Cookie。默认 `true`。
+- `inject_cookies`：注入 state 的同时注入账号级路由 Cookie。默认 `true`。**注意：还需要账号 JSON 里配置 `"headers": {"Cookie": "$Cookie"}` 才能真正到达上游**，见上一节。
 - `harvest_cookies`：从上游响应（真实流量与探测）采集 `__cflb` / `__oailb`。默认 `true`。只认这两个名字，其余 Cookie 一律不看、不存、不显示。
 - `probe_send_cookies`：探测请求携带当前存活的路由 Cookie，让探测和线上流量用同一套凭据打票。默认 `true`。
 - `cookie_ttl_seconds`：路由 Cookie 的最长保存时间。默认 `300`。上游给了更短的 `Max-Age` / `Expires` 就按上游的算，这个值是上限。
@@ -141,6 +141,21 @@ BestGo 这类 SOCKS5 节点，条目不带协议前缀时记得把 `proxy_scheme
 - Cookie 自己也会过期，而且很可能比票先死。插件因此分开记录票龄与 Cookie 龄，并在状态页给出“最近一次失效原因”。
 
 默认行为组合：`state_aware` 定时续期 + `invalidate_on_reject` 即时作废 + 探测携带同一套 Cookie。三者配合下，一旦上游拒绝刚注入的票，插件立刻丢弃它并重探，而不是继续拿坏票发请求到达 TTL。
+
+### 前提：必须让账号允许转发 Cookie（否则注入无效）
+
+CPA 的 Codex 执行器**不会**把客户端请求头整体转发给上游，它只复制一份固定白名单（`x-codex-turn-state`、`x-codex-turn-metadata`、`session_id`、`User-Agent`、`Originator` 等），**`Cookie` 不在其中**。所以插件把 Cookie 写进请求头之后，CPA 在发往上游前会把它丢掉——状态页上会显示“`已注入` 在涨、`带Cookie注入` 是 0”，探测也因此白打。
+
+要打通这一步，在每个 Codex 账号的 JSON 里加一行自定义请求头：
+
+```json
+{
+  "access_token": "...",
+  "headers": { "Cookie": "$Cookie" }
+}
+```
+
+`$Cookie` 是 CPA 的取值语法：它会把本次请求头里的 `Cookie`（也就是插件注入的那一份）复制到上游请求上。账号没有这一行时，状态页顶部会出现黄色横幅点名具体账号，账号卡片上也会写“Cookie 转发: 未开启（注入的 Cookie 到不了上游）”。
 
 ## 是否会注入到当前账号后续所有 CPA 请求
 

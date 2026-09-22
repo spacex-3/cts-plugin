@@ -112,7 +112,7 @@ For SOCKS5-only providers such as BestGo, set `proxy_scheme: socks5` when the en
 - `target_state_length`: required state length. Default: `292`.
 - `accepted_blocks`: the admission filter for tickets. Only states whose Fernet block count appears here are cached and injected. Default: `[10, 12]` — `10` ≈ 292 characters (Pro/Plus), `12` ≈ 332 (Team/business). `11` ≈ 312 is the shape proxied or throttled exits commonly return, so it is rejected by default: it can never displace the known-good 292 ticket you already hold. Add `11` only once 312 is confirmed as a legitimate shape for your models. Valid Fernet states use block count first; non-Fernet states fall back to `target_state_length`. Rejections are reported with the received length and block count so the choice is visible.
 - `ttl_seconds`: maximum cache age for injection. Default: `300` (five minutes). A measured 292 only survived about 200 seconds, so a shorter default is the safer one: injecting an expired ticket cannot make an answer better. The status page reports the measured combo lifetime so the value can be tuned from data.
-- `inject_cookies`: send the account-level routing cookies together with the state. Default: `true`.
+- `inject_cookies`: send the account-level routing cookies together with the state. Default: `true`. **The cookies only reach the upstream when the auth file declares `"headers": {"Cookie": "$Cookie"}`** — see the requirement section above.
 - `harvest_cookies`: collect `__cflb`/`__oailb` from upstream responses (production traffic and probes). Default: `true`. Only those two names are ever read, stored or displayed.
 - `probe_send_cookies`: make probes carry the current live routing cookies, so a probe asks for a ticket with the same credentials production traffic uses. Default: `true`.
 - `cookie_ttl_seconds`: hard cap on how long a routing cookie is kept. Default: `300`. A shorter upstream `Max-Age`/`Expires` wins.
@@ -141,6 +141,21 @@ Measured on one account and egress: the ticket and the cookies are independent. 
 - Cookies expire on their own, and they are the more likely half to die first. The plugin tracks ticket age and cookie age separately and reports the last invalidation reason per model.
 
 The defaults work together: `state_aware` renewal, `invalidate_on_reject`, and probes carrying the same cookies. The moment the upstream refuses the ticket we just injected, it is dropped and reprobed instead of being injected until the TTL runs out.
+
+### Requirement: the account must forward cookies
+
+CPA's Codex executor does **not** forward client headers upstream. It copies a fixed whitelist (`x-codex-turn-state`, `x-codex-turn-metadata`, `session_id`, `User-Agent`, `Originator`, ...) and **`Cookie` is not on it**. A cookie header written by the plugin is therefore dropped before the request leaves CPA: the page will show `已注入` climbing while `带Cookie注入` stays at zero, and probes are wasted.
+
+To open that path, add one custom header to each Codex auth file:
+
+```json
+{
+  "access_token": "...",
+  "headers": { "Cookie": "$Cookie" }
+}
+```
+
+`$Cookie` is CPA's substitution syntax: it copies the request's `Cookie` header (the one this plugin fills in) onto the upstream request. Without it the status page raises an amber banner naming the affected accounts and each account card reads `Cookie 转发: 未开启`.
 
 ## Matching behavior
 
