@@ -24,7 +24,6 @@ type pluginRuntime struct {
 	ticketStats        map[cacheKey]ticketCounters
 	cookieStats        map[string]cookieCounters
 	combos             map[cacheKey]comboStats
-	injectedRequests   map[string]injectedRequest
 	probeLogs          []probeLogEntry
 	injections         []injectionLogEntry
 	globalErr          string
@@ -116,18 +115,6 @@ type cookieCounters struct {
 	LastRoute      string    `json:"last_route,omitempty"`
 }
 
-// injectedRequest remembers one production request we sent a ticket on, so a
-// rejected response can be tied back to the ticket we injected instead of to a
-// request that went out bare (a bare request answering 312 says nothing about
-// the cached ticket).
-type injectedRequest struct {
-	Key        cacheKey
-	InjectedAt time.Time
-	StateAge   time.Duration
-	CookieAge  time.Duration
-	HadCookie  bool
-}
-
 // cookieInjection is what the interceptor decided to do with cookies for one
 // request: the merged header value, the age of the oldest cookie in it and the
 // names it carried.
@@ -164,14 +151,13 @@ func newRuntime() *pluginRuntime {
 	cfg := normalizeConfig(pluginConfig{})
 	return &pluginRuntime{
 		config:             cfg,
-		cache:              newStateCache(cfg.ttl(), cfg.targetLength(), time.Now),
+		cache:              newStateCache(cfg.ttl(), time.Now),
 		cookies:            newCookieJar(cfg.cookieTTL(), time.Now),
 		statuses:           make(map[cacheKey]probeRecord),
 		windows:            make(map[cacheKey]windowStats),
 		ticketStats:        make(map[cacheKey]ticketCounters),
 		cookieStats:        make(map[string]cookieCounters),
 		combos:             make(map[cacheKey]comboStats),
-		injectedRequests:   make(map[string]injectedRequest),
 		injections:         make([]injectionLogEntry, 0),
 		host:               liveHost{},
 		transport:          utlsProbeTransport{},
@@ -228,10 +214,9 @@ func (r *pluginRuntime) applyConfig(cfg pluginConfig) error {
 	r.config = clonePluginConfig(cfg)
 	r.harvestPending = make(map[harvestKey]*harvestCandidate)
 	if r.cache == nil {
-		r.cache = newStateCache(cfg.ttl(), cfg.targetLength(), nowFunc)
+		r.cache = newStateCache(cfg.ttl(), nowFunc)
 	}
-	r.cache.configureAcceptedBlocks(cfg.acceptedBlocks())
-	r.cache.reconfigure(cfg.ttl(), cfg.targetLength(), nowFunc)
+	r.cache.reconfigure(cfg.ttl(), nowFunc)
 	r.cache.configureIssuedAt(cfg.UseIssuedAt)
 	if r.cookies == nil {
 		r.cookies = newCookieJar(cfg.cookieTTL(), nowFunc)
@@ -248,9 +233,6 @@ func (r *pluginRuntime) applyConfig(cfg pluginConfig) error {
 	}
 	if r.combos == nil {
 		r.combos = make(map[cacheKey]comboStats)
-	}
-	if r.injectedRequests == nil {
-		r.injectedRequests = make(map[string]injectedRequest)
 	}
 	if r.targetTrigger == nil {
 		r.targetTrigger = make(chan cacheKey, 64)
@@ -435,7 +417,7 @@ func (r *pluginRuntime) observeState(authID, model, state, source string) bool {
 	}
 	refresh := strings.EqualFold(strings.TrimSpace(source), "probe") || strings.EqualFold(strings.TrimSpace(source), "direct")
 	prev, hadPrev := r.cache.lookup(authID, model)
-	entry, accepted, reset := r.cache.storeTarget(authID, model, state, source, refresh)
+	entry, accepted, reset := r.cache.store(authID, model, state, source, refresh)
 	if accepted && reset {
 		key := makeCacheKey(authID, model)
 		r.mu.Lock()
@@ -532,115 +514,21 @@ func (r *pluginRuntime) cookieInjectionFor(headers http.Header, authID string, c
 	return cookieInjection{Header: mergeCookieHeader(existing, live), Age: age, Names: names}
 }
 
-// rememberInjectedRequestLocked keeps the injection ledger small: entries older
-// than injectedRequestTTL are useless because the response has long arrived.
-func (r *pluginRuntime) rememberInjectedRequestLocked(requestID string, key cacheKey, now time.Time, stateAge, cookieAge time.Duration, hadCookie bool) {
-	requestID = strings.TrimSpace(requestID)
-	if r == nil || requestID == "" || key.AuthID == "" || key.Model == "" {
-		return
-	}
-	if r.injectedRequests == nil {
-		r.injectedRequests = make(map[string]injectedRequest)
-	}
-	if len(r.injectedRequests) >= injectedRequestLimit {
-		oldestID := ""
-		oldestAt := time.Time{}
-		for id, record := range r.injectedRequests {
-			if oldestID == "" || record.InjectedAt.Before(oldestAt) {
-				oldestID, oldestAt = id, record.InjectedAt
-			}
-		}
-		delete(r.injectedRequests, oldestID)
-	}
-	for id, record := range r.injectedRequests {
-		if now.Sub(record.InjectedAt) > injectedRequestTTL {
-			delete(r.injectedRequests, id)
-		}
-	}
-	r.injectedRequests[requestID] = injectedRequest{
-		Key:        key,
-		InjectedAt: now,
-		StateAge:   stateAge,
-		CookieAge:  cookieAge,
-		HadCookie:  hadCookie,
-	}
-}
-
-func (r *pluginRuntime) takeInjectedRequest(requestID string) (injectedRequest, bool) {
-	requestID = strings.TrimSpace(requestID)
-	if r == nil || requestID == "" {
-		return injectedRequest{}, false
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	record, ok := r.injectedRequests[requestID]
-	if ok {
-		delete(r.injectedRequests, requestID)
-	}
-	return record, ok
-}
-
-// invalidateKey drops a cached ticket and books the combo lifetime. It is the
-// bookkeeping half of every "this ticket is dead" decision.
-func (r *pluginRuntime) invalidateKey(key cacheKey, reason string, at time.Time) {
-	if r == nil || key.AuthID == "" || key.Model == "" {
-		return
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.cache.invalidate(key.AuthID, key.Model)
-	combo := r.combos[key]
-	combo.AuthID = key.AuthID
-	combo.Model = key.Model
-	if !combo.StartedAt.IsZero() && !at.Before(combo.StartedAt) {
-		combo.noteLifetime(at.Sub(combo.StartedAt))
-		combo.Invalidations++
-		combo.LastInvalidatedAt = at
-		combo.LastInvalidatedBy = reason
-	}
-	combo.StartedAt = time.Time{}
-	r.combos[key] = combo
-	r.persistLocked()
-}
-
-// harvestHarvestedState reacts to the one death signal the upstream gives away
-// for free: a response that refuses the ticket we sent on that very request. A
-// request that went out bare proves nothing about the cached ticket, so it is
-// checked against the injection ledger first.
-func (r *pluginRuntime) harvestHarvestedState(requestID, authID, model, state string) {
-	if r == nil || strings.TrimSpace(state) == "" {
-		return
-	}
-	cfg := r.configSnapshot()
-	if !cfg.invalidateOnRejectEnabled() || cfg.stateAccepted(state) {
-		return
-	}
-	key := makeCacheKey(authID, model)
-	if key.AuthID == "" || key.Model == "" {
-		return
-	}
-	record, ok := r.takeInjectedRequest(requestID)
-	if !ok || record.Key != key {
-		return
-	}
-	reason := "state"
-	if record.HadCookie && record.CookieAge > record.StateAge {
-		// The cookie had been in use longer than the ticket, so the cookie is
-		// the likelier culprit; the status page reports which side ages out.
-		reason = "cookie"
-	}
-	r.invalidateKey(key, reason, r.now())
-	r.host.Log("info", "codex-turn-state: upstream refused the injected turn state; cache invalidated", map[string]any{
-		"auth_id":            key.AuthID,
-		"model":              key.Model,
-		"length":             len(strings.TrimSpace(state)),
-		"blocks":             stateBlocksText(state),
-		"reason":             reason,
-		"state_age_seconds":  int(record.StateAge.Seconds()),
-		"cookie_age_seconds": int(record.CookieAge.Seconds()),
-	})
-	r.triggerTargetProbe(key)
-}
+// Tickets are no longer retired on a shape mismatch.
+//
+// Until 0.6.2 this was "invalidate_on_reject": a harvested state whose Fernet
+// block count fell outside accepted_blocks was read as the upstream refusing the
+// ticket we had injected, and the cache entry was dropped on that very response.
+// Measurement retired the premise. The block count tracks whether that turn
+// carried reasoning content, not whether the ticket was honoured: the same
+// gateway, the same cookie and the same two-minute window returned one shape and
+// then the other, and injecting a ticket never produced the shape that was
+// injected (3 pairs out of 3, control group identical). In the mode the upstream
+// is in today every response would therefore have retired the ticket, so the
+// plugin re-probed after every single request and kept nothing.
+//
+// What is left is age: a cached ticket lives until its TTL, and the cookie pool
+// ages out on cookie_ttl_seconds.
 
 // recordTicketTurnover notes whether a harvested response carried the ticket the
 // cache already held (an echo) or a different one (a change). Probed and direct
@@ -743,7 +631,6 @@ func (r *pluginRuntime) recordInjection(req pluginapi.RequestInterceptRequest, e
 		stats.LastInjectedFrom = entry.Source
 		r.ticketStats[key] = stats
 	}
-	r.rememberInjectedRequestLocked(req.RequestID, key, now, now.Sub(entry.freshnessTime()), injection.Age, injection.injected())
 	r.persistLocked()
 }
 
@@ -1045,7 +932,6 @@ func (r *pluginRuntime) snapshotStatus() runtimeSnapshot {
 		Now:            r.now(),
 		TTL:            cfg.ttl(),
 		CookieTTL:      cfg.cookieTTL(),
-		TargetLen:      cfg.targetLength(),
 		NextProbeAt:    nextProbeAt,
 	}
 }
@@ -1066,6 +952,5 @@ type runtimeSnapshot struct {
 	Now            time.Time
 	TTL            time.Duration
 	CookieTTL      time.Duration
-	TargetLen      int
 	NextProbeAt    time.Time
 }

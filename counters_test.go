@@ -10,7 +10,7 @@ import (
 
 func TestTicketCountersTrackInjectionsBareAndTurnover(t *testing.T) {
 	now := time.Date(2026, time.September, 20, 9, 0, 0, 0, time.UTC)
-	r := isolatedRuntime(t, pluginConfig{TargetStateLength: 3})
+	r := isolatedRuntime(t, pluginConfig{})
 	r.nowFunc = func() time.Time { return now }
 
 	// Probe and direct writes are the requests that ask for a fresh ticket, so they
@@ -49,17 +49,17 @@ func TestTicketCountersPersistAcrossReload(t *testing.T) {
 	runtimeConfigDir = func() (string, error) { return dir, nil }
 	t.Cleanup(func() { runtimeConfigDir = previous })
 
-	cfg := normalizeConfig(pluginConfig{TargetStateLength: 3})
+	cfg := normalizeConfig(pluginConfig{})
 	first := newRuntime()
 	first.config = cfg
-	first.cache = newStateCache(time.Hour, 3, time.Now)
+	first.cache = newStateCache(time.Hour, time.Now)
 	first.observeState("auth-1", "model-1", "abc", "harvest")
 	first.observeState("auth-1", "model-1", "abc", "harvest")
 	first.recordBareRequest("auth-1", "model-1")
 
 	second := newRuntime()
 	second.config = cfg
-	second.cache = newStateCache(time.Hour, 3, time.Now)
+	second.cache = newStateCache(time.Hour, time.Now)
 	second.mu.Lock()
 	restorePersistedRuntimeLocked(second, second.config)
 	second.mu.Unlock()
@@ -70,14 +70,16 @@ func TestTicketCountersPersistAcrossReload(t *testing.T) {
 	}
 }
 
-func TestProbeAttemptsPerRouteRepeatsEachEgress(t *testing.T) {
+func TestFailedAttemptsPerRouteRepeatEachEgress(t *testing.T) {
 	probe := false
-	transport := &sequenceProbeTransport{states: []string{"xx", "xx", "abc"}}
+	// Retrying inside one egress is now driven by a failed attempt (no state at
+	// all), not by a returned length we did not expect.
+	transport := &sequenceProbeTransport{states: []string{"", "", "abc"}}
 	r := isolatedRuntime(t, pluginConfig{
-		TargetStateLength: 3,
-		MaxProbeAttempts:  3,
-		AttemptsPerRoute:  2,
-		Probe:             &probe,
+
+		MaxProbeAttempts: 3,
+		AttemptsPerRoute: 2,
+		Probe:            &probe,
 	})
 	r.transport = transport
 	target := probeTarget{
@@ -103,14 +105,14 @@ func TestProbeAttemptsPerRouteRepeatsEachEgress(t *testing.T) {
 	}
 }
 
-func TestDirectProbeRetriesWithinOneEgress(t *testing.T) {
+func TestDirectProbeRetriesAfterAnEmptyResponse(t *testing.T) {
 	probe := false
-	transport := &sequenceProbeTransport{states: []string{"xx", "abc"}}
+	transport := &sequenceProbeTransport{states: []string{"", "abc"}}
 	r := isolatedRuntime(t, pluginConfig{
-		TargetStateLength: 3,
-		DirectProbe:       boolPtr(true),
-		AttemptsPerRoute:  2,
-		Probe:             &probe,
+
+		DirectProbe:      boolPtr(true),
+		AttemptsPerRoute: 2,
+		Probe:            &probe,
 	})
 	r.transport = transport
 	target := probeTarget{

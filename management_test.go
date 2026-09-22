@@ -34,8 +34,8 @@ func TestRenderStatusPageShowsProbeStatesOnlyWhenEnabled(t *testing.T) {
 
 func TestRenderStatusPageUsesMatchAndMismatchColors(t *testing.T) {
 	page := string(renderStatusPage(statusView{
-		TargetStateLength: 292,
-		Models:            []string{"model-1"},
+
+		Models: []string{"model-1"},
 		Accounts: []statusAccount{{
 			AuthID: "auth-1",
 			Label:  "account-one",

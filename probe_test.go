@@ -34,16 +34,19 @@ func (t *sequenceProbeTransport) Do(_ context.Context, proxyURL string, _ *http.
 	}, nil
 }
 
-func TestProbeTargetRetriesRejectedStateLength(t *testing.T) {
+func TestProbeTargetStopsAtTheFirstState(t *testing.T) {
 	probe := false
+	// Until 0.6.2 a second state was requested whenever the first one's length was
+	// not the configured target. Shape is no longer a reason to retry: the first
+	// state that comes back is the ticket.
 	transport := &sequenceProbeTransport{states: []string{"xx", "abc"}}
 	testRuntime := newRuntime()
 	testRuntime.config = normalizeConfig(pluginConfig{
-		TargetStateLength: 3,
-		MaxProbeAttempts:  2,
-		Probe:             &probe,
+
+		MaxProbeAttempts: 2,
+		Probe:            &probe,
 	})
-	testRuntime.cache = newStateCache(time.Hour, 3, time.Now)
+	testRuntime.cache = newStateCache(time.Hour, time.Now)
 	testRuntime.host = noopHost{}
 	testRuntime.transport = transport
 
@@ -55,15 +58,15 @@ func TestProbeTargetRetriesRejectedStateLength(t *testing.T) {
 	}
 	testRuntime.probeTarget(context.Background(), "http://proxy.example:8080", target)
 
-	if transport.calls != 2 {
-		t.Fatalf("probe calls = %d, want 2", transport.calls)
+	if transport.calls != 1 {
+		t.Fatalf("probe calls = %d, want the first state to be taken", transport.calls)
 	}
 	entry, ok := testRuntime.cache.lookup(target.AuthID, target.Model)
 	if !ok {
-		t.Fatal("second target-length state should be cached")
+		t.Fatal("the first returned state should be cached")
 	}
-	if entry.State != "abc" {
-		t.Fatalf("cached state = %q, want abc", entry.State)
+	if entry.State != "xx" {
+		t.Fatalf("cached state = %q, want xx", entry.State)
 	}
 }
 
@@ -211,7 +214,7 @@ func probeConfigRuntime(t *testing.T, cfg pluginConfig) *pluginRuntime {
 			"index-1": {JSON: json.RawMessage(`{"access_token":"token-1"}`)},
 		},
 	}
-	testRuntime.cache = newStateCache(time.Hour, 292, time.Now)
+	testRuntime.cache = newStateCache(time.Hour, time.Now)
 	return testRuntime
 }
 
@@ -293,10 +296,9 @@ func TestProbeTargetOnceProbesDirectOnlyWithoutProxies(t *testing.T) {
 	probe, direct := true, true
 	transport := &sequenceProbeTransport{states: []string{strings.Repeat("a", 292)}}
 	testRuntime := probeConfigRuntime(t, pluginConfig{
-		Models:            []string{"model-1"},
-		Probe:             &probe,
-		DirectProbe:       &direct,
-		TargetStateLength: 292,
+		Models:      []string{"model-1"},
+		Probe:       &probe,
+		DirectProbe: &direct,
 	})
 	testRuntime.transport = transport
 	target := probeTarget{AuthID: "auth-1", Model: "model-1", Token: "token", BaseURL: "https://example.test/backend-api/codex"}
@@ -348,16 +350,18 @@ func TestListProbeTargetsDoesNotTreatLabelsAsAuthIDs(t *testing.T) {
 func TestDirectBaselineAndEveryProxyAttemptAreLogged(t *testing.T) {
 	probe := false
 	showState := true
-	transport := &sequenceProbeTransport{states: []string{"direct-state", "xx", "abc"}}
+	// Both the baseline and the first proxy attempt come back without a state, so
+	// every attempt gets logged before the third one succeeds.
+	transport := &sequenceProbeTransport{states: []string{"", "", "abc"}}
 	testRuntime := newRuntime()
 	testRuntime.config = normalizeConfig(pluginConfig{
-		TargetStateLength: 3,
-		MaxProbeAttempts:  2,
-		ProbeLogLimit:     10,
-		Probe:             &probe,
-		ShowStateValues:   &showState,
+
+		MaxProbeAttempts: 2,
+		ProbeLogLimit:    10,
+		Probe:            &probe,
+		ShowStateValues:  &showState,
 	})
-	testRuntime.cache = newStateCache(time.Hour, 3, time.Now)
+	testRuntime.cache = newStateCache(time.Hour, time.Now)
 	testRuntime.host = noopHost{}
 	testRuntime.transport = transport
 	target := probeTarget{
@@ -377,10 +381,10 @@ func TestDirectBaselineAndEveryProxyAttemptAreLogged(t *testing.T) {
 	if len(snap.Logs) != 3 {
 		t.Fatalf("probe logs = %d, want 3", len(snap.Logs))
 	}
-	if snap.Logs[0].Route != "direct" || snap.Logs[0].State != "direct-state" || snap.Logs[0].Cached {
+	if snap.Logs[0].Route != "direct" || snap.Logs[0].State != "" || snap.Logs[0].Cached || snap.Logs[0].Error == "" {
 		t.Fatalf("direct log = %#v", snap.Logs[0])
 	}
-	if snap.Logs[1].Route != "proxy" || snap.Logs[1].Attempt != 1 || snap.Logs[1].State != "xx" || snap.Logs[1].TargetMatch {
+	if snap.Logs[1].Route != "proxy" || snap.Logs[1].Attempt != 1 || snap.Logs[1].State != "" || snap.Logs[1].Cached {
 		t.Fatalf("first proxy log = %#v", snap.Logs[1])
 	}
 	if snap.Logs[2].Route != "proxy" || snap.Logs[2].Attempt != 2 || snap.Logs[2].State != "abc" || !snap.Logs[2].TargetMatch || !snap.Logs[2].Cached {
@@ -416,11 +420,11 @@ func TestProbeTargetOnceStopsAfterDirectMatch(t *testing.T) {
 	transport := &sequenceProbeTransport{states: []string{"abc"}}
 	testRuntime := newRuntime()
 	testRuntime.config = normalizeConfig(pluginConfig{
-		TargetStateLength: 3,
-		DirectProbe:       boolPtr(true),
-		Probe:             &probe,
+
+		DirectProbe: boolPtr(true),
+		Probe:       &probe,
 	})
-	testRuntime.cache = newStateCache(time.Hour, 3, time.Now)
+	testRuntime.cache = newStateCache(time.Hour, time.Now)
 	testRuntime.host = noopHost{}
 	testRuntime.transport = transport
 	target := probeTarget{AuthID: "auth-1", Model: "model-1", BaseURL: "https://example.test/backend-api/codex"}
@@ -438,17 +442,17 @@ func TestProbeTargetOnceStopsAfterDirectMatch(t *testing.T) {
 	}
 }
 
-func TestProbeTargetOnceFallsBackToProxiesAfterDirectMismatch(t *testing.T) {
+func TestProbeTargetOnceFallsBackToProxiesAfterDirectError(t *testing.T) {
 	probe := false
-	transport := &sequenceProbeTransport{states: []string{"xx", "abc"}}
+	transport := &sequenceProbeTransport{states: []string{"", "abc"}}
 	testRuntime := newRuntime()
 	testRuntime.config = normalizeConfig(pluginConfig{
-		TargetStateLength: 3,
-		DirectProbe:       boolPtr(true),
-		MaxProbeAttempts:  2,
-		Probe:             &probe,
+
+		DirectProbe:      boolPtr(true),
+		MaxProbeAttempts: 2,
+		Probe:            &probe,
 	})
-	testRuntime.cache = newStateCache(time.Hour, 3, time.Now)
+	testRuntime.cache = newStateCache(time.Hour, time.Now)
 	testRuntime.host = noopHost{}
 	testRuntime.transport = transport
 	target := probeTarget{AuthID: "auth-1", Model: "model-1", BaseURL: "https://example.test/backend-api/codex"}
@@ -472,7 +476,7 @@ func TestShouldSkipFreshProbeOnlyInStateAwareMode(t *testing.T) {
 		ProbeLeadSeconds: 300,
 		TTLSeconds:       3600,
 	})
-	rt.cache = newStateCache(time.Hour, 292, rt.nowFunc)
+	rt.cache = newStateCache(time.Hour, rt.nowFunc)
 	rt.cache.putManual("auth-1", "model-1", "manual-state")
 	target := probeTarget{AuthID: "auth-1", Model: "model-1"}
 

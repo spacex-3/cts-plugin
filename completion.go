@@ -135,12 +135,9 @@ func (r *pluginRuntime) harvestCompleted(requestID, authID, model, state string,
 	} else if len(r.harvestPending) < 256 || r.harvestPending[key] != nil {
 		r.harvestPending[key] = candidate
 	}
-	acceptedState := candidate.state
+	harvestedState := candidate.state
 	r.mu.Unlock()
 	if completed && !failed {
-		// Only judge the ticket once the turn is known to have completed, so a
-		// metadata frame from a still-healthy stream cannot retire a good ticket.
-		r.harvestHarvestedState(requestID, authID, model, acceptedState)
-		r.observeState(authID, model, acceptedState, "harvest")
+		r.observeState(authID, model, harvestedState, "harvest")
 	}
 }

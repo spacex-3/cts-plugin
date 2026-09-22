@@ -17,8 +17,8 @@ func TestApplyAfterAuthInjectsOnlyConfiguredTarget(t *testing.T) {
 		Models:  []string{"model-1"},
 		Probe:   &probe,
 	})
-	testRuntime.cache = newStateCache(time.Hour, 3, time.Now)
-	if !testRuntime.cache.putIfTarget("auth-1", "model-1", "abc", "probe") {
+	testRuntime.cache = newStateCache(time.Hour, time.Now)
+	if !testRuntime.cache.putState("auth-1", "model-1", "abc", "probe") {
 		t.Fatal("failed to seed cache")
 	}
 	withTestRuntime(t, testRuntime)
@@ -49,7 +49,7 @@ func TestHarvestFromStreamRespectsConfiguredScope(t *testing.T) {
 		Models:  []string{"model-1"},
 		Probe:   &probe,
 	})
-	testRuntime.cache = newStateCache(time.Hour, 3, time.Now)
+	testRuntime.cache = newStateCache(time.Hour, time.Now)
 	withTestRuntime(t, testRuntime)
 
 	chunk := []byte(`data: {"headers":{"x-codex-turn-state":"abc"}}`)

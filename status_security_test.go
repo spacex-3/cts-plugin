@@ -223,7 +223,6 @@ func TestVisibleStatusErrorExplainsPluginRaisedFailures(t *testing.T) {
 		probeErrorNoProxyConfigured:                       "未配置代理",
 		probeErrorNoUsableProxy + ": line 1: bad":         "没有一条能解析",
 		"no matching Codex credentials":                   "Codex 账号",
-		"turn state rejected (length 312, blocks 11)":     "长度 312 / 块 11",
 		"probe status 403: forbidden":                     "HTTP 403",
 		"probe request: utls: dial upstream: i/o timeout": "出口连接失败",
 		"build probe proxy: unsupported proxy scheme":     "出口连接失败",

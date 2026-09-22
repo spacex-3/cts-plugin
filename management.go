@@ -53,8 +53,6 @@ type statusView struct {
 	AuthIDs                 []string          `json:"auth_ids"`
 	Models                  []string          `json:"models"`
 	IntervalSeconds         int               `json:"interval_seconds"`
-	TargetStateLength       int               `json:"target_state_length"`
-	AcceptedBlocks          []int             `json:"accepted_blocks"`
 	TTLSeconds              int               `json:"ttl_seconds"`
 	FailureReprobeThreshold int               `json:"failure_reprobe_threshold"`
 	MaxProbeAttempts        int               `json:"max_probe_attempts"`
@@ -71,7 +69,6 @@ type statusView struct {
 	HarvestCookies          bool              `json:"harvest_cookies"`
 	ProbeSendCookies        bool              `json:"probe_send_cookies"`
 	CookieTTLSeconds        int               `json:"cookie_ttl_seconds"`
-	InvalidateOnReject      bool              `json:"invalidate_on_reject"`
 	StateRefreshSeconds     int               `json:"state_refresh_seconds,omitempty"`
 	ShowStateValues         bool              `json:"show_state_values"`
 	ProbeLogLimit           int               `json:"probe_log_limit"`
@@ -359,10 +356,6 @@ func buildStatusView() statusView {
 	if ttlSeconds <= 0 {
 		ttlSeconds = defaultTTLSeconds
 	}
-	target := cfg.TargetStateLength
-	if target <= 0 {
-		target = defaultTargetStateLength
-	}
 	proxies := redactedProxyList(cfg)
 	view := statusView{
 		Proxy:                   strings.Join(proxies, "\n"),
@@ -370,8 +363,6 @@ func buildStatusView() statusView {
 		AuthIDs:                 cfg.authIDs(),
 		Models:                  cfg.models(),
 		IntervalSeconds:         interval,
-		TargetStateLength:       target,
-		AcceptedBlocks:          cfg.acceptedBlocks(),
 		TTLSeconds:              ttlSeconds,
 		FailureReprobeThreshold: cfg.failureReprobeThreshold(),
 		MaxProbeAttempts:        cfg.maxAttempts(),
@@ -386,7 +377,6 @@ func buildStatusView() statusView {
 		HarvestCookies:          cfg.harvestCookiesEnabled(),
 		ProbeSendCookies:        cfg.probeSendCookiesEnabled(),
 		CookieTTLSeconds:        int(cfg.cookieTTL() / time.Second),
-		InvalidateOnReject:      cfg.invalidateOnRejectEnabled(),
 		StateRefreshSeconds:     cfg.StateRefreshSeconds,
 		ShowStateValues:         cfg.showStateValuesEnabled(),
 		ProbeLogLimit:           cfg.probeLogLimit(),
@@ -714,8 +704,9 @@ func renderStatusPage(view statusView, triggered bool) []byte {
 	}
 
 	out.WriteString("<div class=\"chips\">")
-	out.WriteString(chipHTML("目标长度", fmt.Sprintf("%d", view.TargetStateLength)))
-	out.WriteString(chipHTML("接受块数", describeAcceptedBlocks(view.AcceptedBlocks)))
+	// The admission filter is gone: length and Fernet block count are reported,
+	// never used to refuse a ticket.
+	out.WriteString(chipHTML("收票门槛", "不限（任何长度/块数都收）"))
 	out.WriteString(chipHTML("TTL", formatDuration(time.Duration(view.TTLSeconds)*time.Second)))
 	out.WriteString(chipHTML("探测间隔", formatDuration(time.Duration(view.IntervalSeconds)*time.Second)))
 	if view.NextProbeAtUnix > 0 {
@@ -736,7 +727,6 @@ func renderStatusPage(view statusView, triggered bool) []byte {
 	out.WriteString(chipHTML("探测凭据", probeCredentialLabel(view)))
 	out.WriteString(chipHTML("注入 Cookie", boolLabel(view.InjectCookies)))
 	out.WriteString(chipHTML("Cookie TTL", formatDuration(time.Duration(view.CookieTTLSeconds)*time.Second)))
-	out.WriteString(chipHTML("失效即失效", boolLabel(view.InvalidateOnReject)))
 	out.WriteString(chipHTML("显示 state", boolLabel(view.ShowStateValues)))
 	out.WriteString("</div>")
 	out.WriteString(writeCookieBanner(view))

@@ -4,9 +4,9 @@
     {
       "id": "codex-turn-state",
       "name": "Codex Turn State Probe",
-      "description": "通过轮换代理探测 Codex turn state，并从正常流量采集；连同账号级路由 Cookie（__cflb/__oailb）一起注入，被上游拒绝时立刻作废重探，按实际账号和模型缓存，不跨账号或模型共享。",
+      "description": "通过轮换代理探测 Codex turn state，并从正常流量采集（任何长度与块数都收）；连同账号级路由 Cookie（__cflb/__oailb）一起注入，没有票时 Cookie 也照注入。按实际账号和模型缓存，不跨账号或模型共享。",
       "author": "spacex-3",
-      "version": "0.6.2",
+      "version": "0.6.3",
       "repository": "https://github.com/spacex-3/cts-plugin",
       "homepage": "https://github.com/spacex-3/cts-plugin/blob/main/README_CN.md",
       "license": "MIT",

@@ -26,8 +26,8 @@ plugins:
 - 不是在管理页面手工粘贴固定 state；而是使用轮换代理主动探测。
 - 还会从正常 HTTP、SSE、WebSocket Codex 响应自动采集。
 - 缓存键是精确的运行时账号 ID **加模型**，不会跨账号或模型共享。
-- 有形态过滤和 TTL；默认只接受 Fernet 块数 `10/12`（≈292/332），非 Fernet 退回长度 `292`，默认 **5 分钟**后失效（实测一张 292 只能维持约 200 秒，写成一小时只会让过期票被继续注入）。
-- 与 state 一起采集、注入账号级路由 Cookie，并用“上游拒绝了我刚注入的 state”作为即时失效信号。
+- 没有形态门槛：任何非空的 state 都会被接受，长度与 Fernet 块数只在状态页展示（详见下方「为什么不再按形态收票」）。默认 **5 分钟**后失效（实测一张 292 只能维持约 200 秒，写成一小时只会让过期票被继续注入）。
+- 采集并注入账号级路由 Cookie；缓存里没有票时 Cookie 也会单独注入。
 - 状态页会给出实测的组合寿命（票 + Cookie 从开始使用到失效），可据此校准 `ttl_seconds`。
 - 缓存仅存在于 CPA 进程内，CPA 重启或插件重载后清空。
 - 管理资源用于查看脱敏状态和手动触发探测，不用于保存固定 state。
@@ -50,7 +50,6 @@ plugins:
         - "gpt-5.6-sol"
         - "gpt-6-astra"
       interval_seconds: 120
-      target_state_length: 292
       ttl_seconds: 300
       inject: true
       harvest: true
@@ -60,7 +59,6 @@ plugins:
       harvest_cookies: true
       probe_send_cookies: false
       cookie_ttl_seconds: 300
-      invalidate_on_reject: true
       probe_schedule: state_aware
       probe_lead_seconds: 180
       show_state_values: false
@@ -109,23 +107,22 @@ BestGo 这类 SOCKS5 节点，条目不带协议前缀时记得把 `proxy_scheme
 - `interval_seconds`：上一轮完整探测结束后，到下一轮的等待时间。默认 `120`，即 2 分钟。票只活几分钟，间隔如果还是 30 分钟，每小时会有大段时间在裸发。
 - `probe_schedule`：探测调度方式。`fixed` 为固定间隔；`state_aware` 在已持有新鲜 state 时跳过周期探测，等接近过期再续期。`on_demand` 只在有请求时探测。默认 `state_aware`。
 - `probe_lead_seconds`：`state_aware` / `on_demand` 模式下，在 state 过期前提前多少秒开始探测。默认 `180`。设为 `0` 时改用 `state_refresh_seconds`（按“票龄超过多少秒算可续期”表达）。
-- `target_state_length`：只缓存指定长度的 state。默认 `292`。
-- `accepted_blocks`：**收票门槛**。只有 Fernet 块数在这张表里的 state 才会进缓存、才会被注入。默认 `[10, 12]`：`10`≈292（Pro/Plus）、`12`≈332（Team/企业）。`11`≈312 是代理或限流出口常见的形态，**默认拒绝**——它不会顶掉你手上那张 292；确认 312 也是合格形态后再手动加成 `[10, 11, 12]`。合法 Fernet 优先按块数判断，非 Fernet 退回 `target_state_length`。探测被拒时状态页会回显实收长度与块数（例：长度 312 / 块 11），据此判断是换出口继续找还是放行这个形态。
+(0.6.3 移除了 `target_state_length` 与 `accepted_blocks`：状态页显示「收票门槛：不限」。)
 - `ttl_seconds`：缓存可用于注入的最长时间。默认 `300`，即 5 分钟。实测一张 292 只能维持约 200 秒，因此**默认值越小越安全**：过期票继续注入只会让请求变笨，不会变好。状态页会给出实测的组合寿命，可据此调整。
 - `inject`：向后续匹配请求注入缓存。默认 `true`。
-- `harvest`：从正常 Codex 流量采集。默认 `true`。
+- `harvest`：从正常 Codex 流量采集 state，任何长度与块数都收。默认 `true`。
 - `probe`：启用后台轮换代理探测。默认 `true`。
-- `direct_probe`：每个账号+模型在代理尝试前先执行不使用代理的直连请求；命中目标形态时会写入缓存并结束该轮。默认 `true`（直连正是实测能打出合格票的出口）；只用代理池时设为 `false`。配合空代理池即为「只用直连探测」——0.5.2 之前代理池为空会整轮跳过。
-- `inject_cookies`：注入 state 的同时注入账号级路由 Cookie。默认 `true`。**注意：还需要账号 JSON 里配置 `"headers": {"Cookie": "$Cookie"}` 才能真正到达上游**，见上一节。
+- `direct_probe`：每个账号+模型在代理尝试前先执行不使用代理的直连请求；一旦拿到 state 就写入缓存并结束该轮。默认 `true`（直连正是实测能打出合格票的出口）；只用代理池时设为 `false`。配合空代理池即为「只用直连探测」——0.5.2 之前代理池为空会整轮跳过。
+- `inject_cookies`：注入账号级路由 Cookie。默认 `true`。Cookie 与 state 相互独立：**缓存里没有票时 Cookie 也会单独注入**（注入记录里来源显示为 `cookie-only`）。**注意：还需要账号 JSON 里配置 `"headers": {"Cookie": "$Cookie"}` 才能真正到达上游**，见上一节。
 - `harvest_cookies`：从上游响应（真实流量与探测）采集 `__cflb` / `__oailb`。默认 `true`。只认这两个名字，其余 Cookie 一律不看、不存、不显示。
 - `probe_send_cookies`：探测请求是否携带当前存活的路由 Cookie。默认 `false`——探测走**冷启动**。原因：Cookie 池是按**账号**存的，而探测会轮换出口，拿着 A 出口采集到的 Cookie 从 B 出口去探测，等于给上游一个和当前连接不符的路由声明（正是代理探测常年回 312 的常见来源）；冷启动探测不存在这个矛盾，而且它打出的新票与新 Cookie 对会被一起采回池子（`harvest_cookies` 开启时）。只有在需要“让探测完全模拟线上流量”时才设为 `true`。状态页的 `探测凭据` chip 显示当前模式，每条探测日志都带 `cookies_sent`。
 - `cookie_ttl_seconds`：路由 Cookie 的最长保存时间。默认 `300`。上游给了更短的 `Max-Age` / `Expires` 就按上游的算，这个值是上限。
-- `invalidate_on_reject`：默认 `true`。当**被注入过 state 的请求**收到上游拒绝的 state（例如又回 312）时，立即作废该缓存并触发重探。裸发请求返回的 312 不会误伤缓存。
+(0.6.3 移除了 `invalidate_on_reject`：它依赖「形态不匹配 = 上游拒绝了这张票」这个判据，而实验证明该判据不成立。)
 - `state_refresh_seconds`：票龄超过这个秒数就算“可续期”，`state_aware` / `on_demand` 会提前重探。默认 `0`，表示用 `probe_lead_seconds`。
 - `show_state_values`：在状态页和 JSON 日志中保留并显示之后捕获到的完整 state。默认 `false`；只应在受保护的管理入口启用。
 - `probe_log_limit`：内存中保留的探测日志条数。默认 `200`，最大 `1000`。
 - `max_probe_attempts`：每轮中每个账号+模型最多尝试次数。默认 `3`。
-- `attempts_per_route`：在同一条线路上（直连或某一个代理节点）重复尝试几次后才换下一条线路，仍受 `max_probe_attempts` 总次数限制。如果每条线路只打一发经常拿到长度不对的 state，就调大它，因为同一出口再发一次常能拿到合格 state。默认 `1`，最大 `10`。
+- `attempts_per_route`：在同一条线路上（直连或某一个代理节点）重复尝试几次后才换下一条线路，仍受 `max_probe_attempts` 总次数限制。重试由**失败**（拿不到 state、非 2xx、连接错误）触发，不再由形态不匹配触发。默认 `1`，最大 `10`。
 - `failure_reprobe_threshold`：当前 state 倒计时窗口内，生产请求连续失败达到该次数后自动对该账号+模型重新探测。默认 `3`；负数表示关闭。
 - `max_output_tokens`：已弃用的兼容配置。Codex 上游拒绝 token 限制参数，因此插件会忽略该项。
 - `prompt`：最小探测输入。默认 `.`。
@@ -140,7 +137,17 @@ BestGo 这类 SOCKS5 节点，条目不带协议前缀时记得把 `proxy_scheme
 - 票与 Cookie **不需要配对**：同一个对话里换票可用，故意错配也可用。所以插件按**账号**维护一个 Cookie 池，所有模型共用最新的那一份。
 - Cookie 自己也会过期，而且很可能比票先死。插件因此分开记录票龄与 Cookie 龄，并在状态页给出“最近一次失效原因”。
 
-默认行为组合：`state_aware` 定时续期 + `invalidate_on_reject` 即时作废 + 冷启动探测（每次打出的是新票与新 Cookie 对，而不是回收上一张）。三者配合下，一旦上游拒绝刚注入的票，插件立刻丢弃它并重探，而不是继续拿坏票发请求到达 TTL。
+默认行为组合：`state_aware` 定时续期 + 冷启动探测（每次打出的是新票与新 Cookie 对，而不是回收上一张）。票按 `ttl_seconds` 存活；0.6.3 起不再有「上传拒绝即作废」，因为那套判据（形态不匹配）实际跟的是响应形态，不是票的死活。
+
+### 为什么不再按形态收票（0.6.3）
+
+0.6.0–0.6.2 有一条收票门槛：只有 Fernet 块数落在 `accepted_blocks`（默认 `[10, 12]`，即 292/332）里的 state 才会进缓存，312（11 块）被当作「上游拒绝了这张票」而丢弃。实测推翻了这个前提：
+
+- **形态会自己变。** 同一台网关、同一份路由 Cookie、相隔两分钟的两次请求，一次给 292、一次给 312。
+- **形态不可携带。** 把一个 292 原样注入回去，返回的从不是那个 292（3 对 3 全部换票，不带 state 的对照组结果完全相同）。
+- **长度跟的是这一回合有没有产出推理内容。** 312 的响应里带 `reasoning` 输出项与加密推理块，292 的没有；两者与「落在哪台网关」无关。
+
+后果很硬：当上游整体处在 312 形态时，这道门槛会把**每一次探测**判成失败，并让**每一次生产请求**作废缓存，票池永远是空的。因此 0.6.3 删掉了形态门槛，也删掉了依赖同一判据的 `invalidate_on_reject`；票现在只按 `ttl_seconds` 存活。长度与块数仍会显示在状态页上，当作诊断读数。
 
 ### 前提：必须让账号允许转发 Cookie（否则注入无效）
 
@@ -236,7 +243,6 @@ us.rrp.bestgo.work:10000:USER-zone-custom-region-US:password
 | --- | --- |
 | 未配置代理，且 direct_probe 未开启 | 探测需要一个出口。填代理，或把 `direct_probe` 设为 true（0.6 起默认已开启）用直连探测。 |
 | 代理配置里没有一条能解析 | 逐行填 `host:port:user:password`（账号密码可省略），或直接粘贴 JSON 数组。写错的行会被跳过并记日志，日志里能看到第几行。 |
-| 上游返回的 state 未被接受（长度 312 / 块 11） | 这个出口给的票不在收票门槛内（默认只收 292/332）。这是**预期行为**：插件会继续用上一张合格的 292，探测会换下一条出口重试。若确认 312 也可用，把 `11` 加进 `accepted_blocks`。 |
 | 探测出口连接失败 | 代理本身不通、被限流或协议选错（BestGo 这类 SOCKS5 节点需要把 `proxy_scheme` 设为 `socks5`）。具体出口与原因见日志。 |
 | 上游返回 HTTP 4xx/5xx | 上游拒绝：额度、封控或凭据失效。对应账号会按 `error_aware_backoff` / `quota_backoff_seconds` 退避。 |
 
@@ -295,8 +301,8 @@ state 或进入 `probe_lead_seconds`（默认 300 秒）续期窗口时排队探
 反复探测触发风控。
 
 `use_issued_at` 无需密钥解析 Fernet 信封的版本、签发时间和块布局；不会解密或验证
-HMAC。保持目标长度检查，并拒绝无效、过期、明显来自未来的 state。开启后过期
-state 不再注入；默认仍保留旧版过期 state 回退。恢复缓存始终保留原 `StoredAt`，
+HMAC。它拒绝无效、过期、明显来自未来的 state（这是信封层面的判据，与长度无关）。
+开启后过期 state 不再注入；默认仍保留旧版过期 state 回退。恢复缓存始终保留原 `StoredAt`，
 包括手动 state；开启此项还会重新解析真实签发时间，重启不会让令牌变年轻。
 
 `require_completed` 要求 SSE 正常分帧结束的 `response.completed`，且

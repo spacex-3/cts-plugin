@@ -15,8 +15,8 @@ func TestPersistedRuntimeSurvivesReload(t *testing.T) {
 	now := time.Date(2026, time.September, 18, 15, 0, 0, 0, time.UTC)
 	first := newRuntime()
 	first.nowFunc = func() time.Time { return now }
-	first.config = normalizeConfig(pluginConfig{TargetStateLength: 3})
-	first.cache = newStateCache(time.Hour, 3, first.nowFunc)
+	first.config = normalizeConfig(pluginConfig{})
+	first.cache = newStateCache(time.Hour, first.nowFunc)
 	first.cache.putManual("auth-1", "model-1", "abc")
 	first.mu.Lock()
 	first.persistLocked()
@@ -24,8 +24,8 @@ func TestPersistedRuntimeSurvivesReload(t *testing.T) {
 
 	second := newRuntime()
 	second.nowFunc = func() time.Time { return now }
-	second.config = normalizeConfig(pluginConfig{TargetStateLength: 3})
-	second.cache = newStateCache(time.Hour, 3, second.nowFunc)
+	second.config = normalizeConfig(pluginConfig{})
+	second.cache = newStateCache(time.Hour, second.nowFunc)
 	second.mu.Lock()
 	restorePersistedRuntimeLocked(second, second.config)
 	second.mu.Unlock()

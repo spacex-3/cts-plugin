@@ -12,11 +12,11 @@ func TestHandleUsageAggregatesWindowMetrics(t *testing.T) {
 	rt := newRuntime()
 	rt.nowFunc = func() time.Time { return now }
 	rt.config = normalizeConfig(pluginConfig{
-		Models:            []string{"model-1"},
-		TargetStateLength: 3,
-		TTLSeconds:        3600,
+		Models: []string{"model-1"},
+
+		TTLSeconds: 3600,
 	})
-	rt.cache.reconfigure(rt.config.ttl(), rt.config.targetLength(), rt.nowFunc)
+	rt.cache.reconfigure(rt.config.ttl(), rt.nowFunc)
 	if !rt.observeState("auth-1", "model-1", "abc", "probe") {
 		t.Fatal("expected target state to be cached")
 	}
@@ -68,12 +68,11 @@ func TestHandleUsageQueuesTargetedReprobeAfterConsecutiveFailures(t *testing.T) 
 	probe := true
 	rt.config = normalizeConfig(pluginConfig{
 		Models:                  []string{"model-1"},
-		TargetStateLength:       3,
 		TTLSeconds:              3600,
 		FailureReprobeThreshold: 3,
 		Probe:                   &probe,
 	})
-	rt.cache.reconfigure(rt.config.ttl(), rt.config.targetLength(), rt.nowFunc)
+	rt.cache.reconfigure(rt.config.ttl(), rt.nowFunc)
 	if !rt.observeState("auth-1", "model-1", "abc", "probe") {
 		t.Fatal("expected target state to be cached")
 	}
@@ -107,8 +106,8 @@ func TestObserveStateRefreshesStoredAtForDirectMatch(t *testing.T) {
 	now := time.Date(2026, time.September, 18, 16, 0, 0, 0, time.UTC)
 	rt := newRuntime()
 	rt.nowFunc = func() time.Time { return now }
-	rt.config = normalizeConfig(pluginConfig{TargetStateLength: 3, TTLSeconds: 3600})
-	rt.cache = newStateCache(time.Hour, 3, rt.nowFunc)
+	rt.config = normalizeConfig(pluginConfig{TTLSeconds: 3600})
+	rt.cache = newStateCache(time.Hour, rt.nowFunc)
 
 	if !rt.observeState("auth-1", "model-1", "abc", "probe") {
 		t.Fatal("expected initial state to be cached")

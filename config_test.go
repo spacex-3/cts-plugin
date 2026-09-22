@@ -30,9 +30,6 @@ func TestPluginConfigDefaults(t *testing.T) {
 	if got := cfg.ttl().Seconds(); got != defaultTTLSeconds {
 		t.Fatalf("ttl = %v, want %d", got, defaultTTLSeconds)
 	}
-	if got := cfg.targetLength(); got != defaultTargetStateLength {
-		t.Fatalf("target length = %d, want %d", got, defaultTargetStateLength)
-	}
 	if !cfg.allows("any-auth", defaultProbeModels[0]) {
 		t.Fatal("empty auth_ids should allow every auth for a default model")
 	}
@@ -51,9 +48,6 @@ func TestProbeLogDefaultsAndClamp(t *testing.T) {
 	}
 	if cfg.probeSendCookiesEnabled() {
 		t.Fatal("probes should go out cold by default")
-	}
-	if !cfg.invalidateOnRejectEnabled() {
-		t.Fatal("a refused ticket should invalidate the cache by default")
 	}
 	if cfg.probeSchedule() != defaultProbeSchedule {
 		t.Fatalf("probe schedule = %q, want %q", cfg.probeSchedule(), defaultProbeSchedule)

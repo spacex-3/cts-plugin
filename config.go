@@ -1,7 +1,6 @@
 package main
 
 import (
-	"strconv"
 	"strings"
 	"time"
 )
@@ -12,7 +11,6 @@ const (
 	resourceContentType = "text/html; charset=utf-8"
 
 	defaultIntervalSeconds         = 120
-	defaultTargetStateLength       = 292
 	defaultTTLSeconds              = 300
 	defaultProbeLeadSeconds        = 180
 	defaultCookieTTLSeconds        = 300
@@ -26,29 +24,20 @@ const (
 	defaultProbePrompt             = "."
 	defaultProbeSchedule           = "state_aware"
 
-	// injectedRequestTTL bounds how long a production request is remembered so a
-	// rejected upstream response can be tied back to the ticket we sent on it.
-	injectedRequestTTL   = 20 * time.Minute
-	injectedRequestLimit = 4096
-
 	codexUserAgent  = "codex-tui/0.154.0 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.154.0)"
 	codexOriginator = "codex-tui"
 	codexDefaultURL = "https://chatgpt.com/backend-api/codex"
 
 	turnStateHeader = "X-Codex-Turn-State"
+
+	// cookieOnlySource marks an injection that carried routing cookies but no
+	// turn state, so the injection log tells the two apart at a glance.
+	cookieOnlySource = "cookie-only"
 )
 
 var (
-	pluginVersion      = "0.6.2"
+	pluginVersion      = "0.6.3"
 	defaultProbeModels = []string{"gpt-5.6-sol", "gpt-6-astra"}
-
-	// Fernet envelope block counts accepted as a full-strength turn state:
-	// 10 blocks = 292 characters, 12 = 332 (Team/business). 11 blocks = 312 is
-	// deliberately NOT accepted by default: it is what the plugin sees from
-	// throttled or proxied exits, and mixing it into the cache would replace a
-	// known-good 292 ticket. Add 11 to accepted_blocks only if 312 is confirmed
-	// as a legitimate shape for your models.
-	defaultAcceptedBlocks = []int{10, 12}
 )
 
 type pluginConfig struct {
@@ -59,8 +48,6 @@ type pluginConfig struct {
 	ProbeAuthIDs            []string `yaml:"probe_auth_ids"`
 	Models                  []string `yaml:"models"`
 	IntervalSeconds         int      `yaml:"interval_seconds"`
-	TargetStateLength       int      `yaml:"target_state_length"`
-	AcceptedBlocks          []int    `yaml:"accepted_blocks"`
 	TTLSeconds              int      `yaml:"ttl_seconds"`
 	Inject                  *bool    `yaml:"inject"`
 	Harvest                 *bool    `yaml:"harvest"`
@@ -70,7 +57,6 @@ type pluginConfig struct {
 	HarvestCookies          *bool    `yaml:"harvest_cookies"`
 	ProbeSendCookies        *bool    `yaml:"probe_send_cookies"`
 	CookieTTLSeconds        int      `yaml:"cookie_ttl_seconds"`
-	InvalidateOnReject      *bool    `yaml:"invalidate_on_reject"`
 	StateRefreshSeconds     int      `yaml:"state_refresh_seconds"`
 	ShowAccountDetails      bool     `yaml:"show_account_details"`
 	ShowInjectionHeaders    bool     `yaml:"show_injection_headers"`
@@ -135,10 +121,6 @@ func (c pluginConfig) probeSendCookiesEnabled() bool {
 	return c.ProbeSendCookies != nil && *c.ProbeSendCookies
 }
 
-func (c pluginConfig) invalidateOnRejectEnabled() bool {
-	return c.InvalidateOnReject == nil || *c.InvalidateOnReject
-}
-
 func (c pluginConfig) cookieTTL() time.Duration {
 	if c.CookieTTLSeconds <= 0 {
 		return time.Duration(defaultCookieTTLSeconds) * time.Second
@@ -174,30 +156,6 @@ func (c pluginConfig) ttl() time.Duration {
 	return time.Duration(c.TTLSeconds) * time.Second
 }
 
-func (c pluginConfig) targetLength() int {
-	if c.TargetStateLength <= 0 {
-		return defaultTargetStateLength
-	}
-	return c.TargetStateLength
-}
-
-func defaultAcceptedBlocksList() []int {
-	return append([]int(nil), defaultAcceptedBlocks...)
-}
-
-func (c pluginConfig) acceptedBlocks() []int {
-	out := make([]int, 0, len(c.AcceptedBlocks))
-	for _, block := range c.AcceptedBlocks {
-		if block > 0 {
-			out = append(out, block)
-		}
-	}
-	if len(out) == 0 {
-		return defaultAcceptedBlocksList()
-	}
-	return out
-}
-
 // blockStateLength is the base64 length a Fernet envelope with this many AES
 // blocks ends up at: 57 bytes of version/timestamp/IV/HMAC plus 16 bytes per
 // block, base64-encoded. 10 → 292, 11 → 312, 12 → 332.
@@ -207,30 +165,6 @@ func blockStateLength(blocks int) (int, bool) {
 	}
 	raw := 57 + blocks*16
 	return ((raw + 2) / 3) * 4, true
-}
-
-func stateBlocksLabel(blocks int) string {
-	length, ok := blockStateLength(blocks)
-	if !ok {
-		return strconv.Itoa(blocks)
-	}
-	return strconv.Itoa(blocks) + "≈" + strconv.Itoa(length)
-}
-
-func describeAcceptedBlocks(blocks []int) string {
-	parts := make([]string, 0, len(blocks))
-	for _, block := range blocks {
-		parts = append(parts, stateBlocksLabel(block))
-	}
-	return strings.Join(parts, " / ")
-}
-
-func (c pluginConfig) stateAccepted(state string) bool {
-	blocks, okBlocks := parseStateBlocks(state)
-	if okBlocks {
-		return containsInt(c.acceptedBlocks(), blocks)
-	}
-	return c.targetLength() > 0 && len(strings.TrimSpace(state)) == c.targetLength()
 }
 
 func (c pluginConfig) maxAttempts() int {
@@ -379,17 +313,7 @@ func clonePluginConfig(cfg pluginConfig) pluginConfig {
 	cfg.ProbeAuthIDs = append([]string(nil), cfg.ProbeAuthIDs...)
 	cfg.Models = append([]string(nil), cfg.Models...)
 	cfg.Proxies = append([]string(nil), cfg.Proxies...)
-	cfg.AcceptedBlocks = append([]int(nil), cfg.AcceptedBlocks...)
 	return cfg
-}
-
-func containsInt(values []int, target int) bool {
-	for _, value := range values {
-		if value == target {
-			return true
-		}
-	}
-	return false
 }
 
 func containsFold(values []string, target string) bool {
@@ -412,9 +336,6 @@ func normalizeConfig(cfg pluginConfig) pluginConfig {
 	cfg.Models = uniqueTrimmed(cfg.Models)
 	if cfg.IntervalSeconds < 0 {
 		cfg.IntervalSeconds = 0
-	}
-	if cfg.TargetStateLength < 0 {
-		cfg.TargetStateLength = 0
 	}
 	if cfg.TTLSeconds < 0 {
 		cfg.TTLSeconds = 0

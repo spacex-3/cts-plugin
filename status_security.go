@@ -109,12 +109,10 @@ func visibleInjectionHeaders(raw string, cfg pluginConfig) string {
 	return string(out)
 }
 
-var stateRejectedPattern = regexp.MustCompile(`turn state rejected \(length (\d+), blocks ([^)]+)\)`)
-
 // Upstream and transport errors can echo credentials, states or account names.
 // Keep detailed errors in local logs instead of copying arbitrary text to HTTP.
-// Errors the plugin raises itself (config, egress, state shape) carry no secrets,
-// so they are translated into readable advice instead of the generic fallback.
+// Errors the plugin raises itself (config, egress) carry no secrets, so they are
+// translated into readable advice instead of the generic fallback.
 func visibleStatusError(raw string) string {
 	if raw == "" {
 		return ""
@@ -130,9 +128,6 @@ func visibleStatusError(raw string) string {
 	}
 	if strings.Contains(raw, "invalid probe proxy") || strings.Contains(raw, "proxy line ") {
 		return "代理配置无法解析：请检查格式（host:port:user:password、URL 或 JSON 数组）。"
-	}
-	if rejected := stateRejectedPattern.FindStringSubmatch(raw); rejected != nil {
-		return "上游返回的 state 未被接受（长度 " + rejected[1] + " / 块 " + rejected[2] + "）：请检查 accepted_blocks（或 target_state_length）是否放行该形态。"
 	}
 	if match := probeStatusPattern.FindStringSubmatch(raw); match != nil {
 		return "上游返回 HTTP " + match[1] + "：详情见本地日志。"

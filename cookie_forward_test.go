@@ -133,10 +133,9 @@ func TestStatusViewReportsCookieForwardState(t *testing.T) {
 	now := time.Date(2026, time.September, 22, 9, 0, 0, 0, time.UTC)
 	probe := false
 	r := isolatedRuntime(t, pluginConfig{
-		AuthIDs:           []string{"auth-1"},
-		Models:            []string{"model-1"},
-		Probe:             &probe,
-		TargetStateLength: 3,
+		AuthIDs: []string{"auth-1"},
+		Models:  []string{"model-1"},
+		Probe:   &probe,
 	})
 	r.nowFunc = func() time.Time { return now }
 	r.host = &targetListHost{

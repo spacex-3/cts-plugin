@@ -36,65 +36,33 @@ type probeRecord struct {
 }
 
 type stateCache struct {
-	mu             sync.Mutex
-	entries        map[cacheKey]cacheEntry
-	ttl            time.Duration
-	targetLength   int
-	acceptedBlocks []int
-	useIssuedAt    bool
-	nowFunc        func() time.Time
+	mu          sync.Mutex
+	entries     map[cacheKey]cacheEntry
+	ttl         time.Duration
+	useIssuedAt bool
+	nowFunc     func() time.Time
 }
 
-func newStateCache(ttl time.Duration, targetLength int, nowFunc func() time.Time) *stateCache {
+func newStateCache(ttl time.Duration, nowFunc func() time.Time) *stateCache {
 	if nowFunc == nil {
 		nowFunc = time.Now
 	}
 	return &stateCache{
-		entries:      make(map[cacheKey]cacheEntry),
-		ttl:          ttl,
-		targetLength: targetLength,
-		nowFunc:      nowFunc,
+		entries: make(map[cacheKey]cacheEntry),
+		ttl:     ttl,
+		nowFunc: nowFunc,
 	}
 }
 
-func (c *stateCache) configureAcceptedBlocks(blocks []int) {
-	if c == nil {
-		return
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.acceptedBlocks = append([]int(nil), blocks...)
-}
-
-func acceptedState(state string, targetLength int, acceptedBlocks []int, fallbackLength bool) bool {
-	if len(acceptedBlocks) == 0 {
-		acceptedBlocks = defaultAcceptedBlocksList()
-	}
-	blocks, okBlocks := parseStateBlocks(state)
-	if okBlocks {
-		return containsInt(acceptedBlocks, blocks)
-	}
-	if fallbackLength {
-		return targetLength > 0 && len(strings.TrimSpace(state)) == targetLength
-	}
-	return false
-}
-
-func (c *stateCache) reconfigure(ttl time.Duration, targetLength int, nowFunc func() time.Time) {
+func (c *stateCache) reconfigure(ttl time.Duration, nowFunc func() time.Time) {
 	if c == nil {
 		return
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.ttl = ttl
-	c.targetLength = targetLength
 	if nowFunc != nil {
 		c.nowFunc = nowFunc
-	}
-	for key, entry := range c.entries {
-		if !acceptedState(entry.State, targetLength, c.acceptedBlocks, true) {
-			delete(c.entries, key)
-		}
 	}
 	c.removeExpiredLocked(c.nowLocked())
 }
@@ -106,12 +74,17 @@ func (c *stateCache) nowLocked() time.Time {
 	return c.nowFunc()
 }
 
-func (c *stateCache) putIfTarget(authID, model, state, source string) bool {
-	_, accepted, _ := c.storeTarget(authID, model, state, source, true)
-	return accepted
+func (c *stateCache) putState(authID, model, state, source string) bool {
+	_, stored, _ := c.store(authID, model, state, source, true)
+	return stored
 }
 
-func (c *stateCache) storeTarget(authID, model, state, source string, refresh bool) (cacheEntry, bool, bool) {
+// store admits every state the upstream hands back. Length and Fernet block
+// count are recorded for the status page, never used to refuse a ticket: the
+// shape upstream returns is a symptom of that turn (whether it produced
+// reasoning), it is not a routing or quality label, and refusing a shape we did
+// not expect simply throws away a working ticket.
+func (c *stateCache) store(authID, model, state, source string, refresh bool) (cacheEntry, bool, bool) {
 	if c == nil {
 		return cacheEntry{}, false, false
 	}
@@ -125,9 +98,6 @@ func (c *stateCache) storeTarget(authID, model, state, source string, refresh bo
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	now := c.nowLocked()
-	if !acceptedState(state, c.targetLength, c.acceptedBlocks, true) {
-		return cacheEntry{}, false, false
-	}
 	var issuedAt time.Time
 	if c.useIssuedAt {
 		var err error
@@ -180,9 +150,6 @@ func (c *stateCache) putManual(authID, model, state string) (cacheEntry, bool) {
 		Length:   len(state),
 		StoredAt: c.nowLocked(),
 		Source:   "manual",
-	}
-	if blocks, okBlocks := parseStateBlocks(state); okBlocks && !containsInt(normalizedBlocks(c.acceptedBlocks), blocks) {
-		return cacheEntry{}, false
 	}
 	if c.useIssuedAt {
 		issuedAt, err := parseStateIssuedAt(state)
@@ -287,13 +254,6 @@ func makeCacheKey(authID, model string) cacheKey {
 	return cacheKey{AuthID: strings.TrimSpace(authID), Model: strings.TrimSpace(model)}
 }
 
-func normalizedBlocks(blocks []int) []int {
-	if len(blocks) == 0 {
-		return defaultAcceptedBlocksList()
-	}
-	return blocks
-}
-
 // Fernet's timestamp is public envelope metadata, not an authenticated claim:
 // this parser neither decrypts the state nor verifies its HMAC.
 func parseStateIssuedAt(state string) (time.Time, error) {
@@ -364,12 +324,6 @@ func (c *stateCache) restore(entry cacheEntry) {
 		return
 	}
 	entry.Length = len(entry.State)
-	if entry.Source != "manual" && !acceptedState(entry.State, c.targetLength, c.acceptedBlocks, true) {
-		return
-	}
-	if blocks, okBlocks := parseStateBlocks(entry.State); okBlocks && !containsInt(normalizedBlocks(c.acceptedBlocks), blocks) {
-		return
-	}
 	entry.IssuedAt = time.Time{}
 	if c.useIssuedAt {
 		issuedAt, err := parseStateIssuedAt(entry.State)

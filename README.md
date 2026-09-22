@@ -22,12 +22,12 @@ Then add the plugin configuration shown in [`config.example.yaml`](config.exampl
 - Optionally records a direct, no-proxy baseline and then sends minimal streaming Codex requests through a rotating proxy.
 - Uses a dedicated uTLS HTTP/2 connection for every probe attempt.
 - Stops reading and closes the connection immediately after finding turn-state metadata.
-- Accepts only states whose Fernet block count is allowed (`accepted_blocks`, default `[10, 12]` ≈ 292/332); non-Fernet states fall back to `target_state_length` (default: `292`).
-- Harvests matching state from regular HTTP, SSE, and WebSocket Codex responses.
-- Captures the account-level routing cookies (`__cflb`, `__oailb`) that now travel with a ticket, and sends them alongside the state.
+- Accepts every state the upstream returns. Length and Fernet block count are reported on the status page, never used to refuse a ticket (see "Why the shape filter is gone").
+- Harvests state from regular HTTP, SSE, and WebSocket Codex responses.
+- Captures the account-level routing cookies (`__cflb`, `__oailb`) that now travel with a ticket, and injects them whether or not a ticket is cached.
 - Caches state in memory by exact runtime auth ID plus resolved model.
 - Replaces `X-Codex-Turn-State` on later matching requests while the state is within `ttl_seconds` (default: five minutes — a measured 292 only lasted about 200 seconds).
-- Drops a cached ticket the moment the upstream refuses it (a 312 response to a request that carried our state) instead of waiting for the TTL.
+- Ages a cached ticket out on `ttl_seconds`. A returned shape is not a refusal signal and no longer retires anything.
 - Never shares state across accounts or models. Routing cookies are account-level, so every model of one account reuses the same live pair, exactly as the upstream issues them.
 
 The state cache is process-local. Restarting CPA or reloading the plugin clears it.
@@ -50,7 +50,6 @@ plugins:
         - "gpt-5.6-sol"
         - "gpt-6-astra"
       interval_seconds: 120
-      target_state_length: 292
       ttl_seconds: 300
       inject: true
       harvest: true
@@ -60,7 +59,6 @@ plugins:
       harvest_cookies: true
       probe_send_cookies: false
       cookie_ttl_seconds: 300
-      invalidate_on_reject: true
       probe_schedule: state_aware
       probe_lead_seconds: 180
       show_state_values: false
@@ -109,14 +107,13 @@ For SOCKS5-only providers such as BestGo, set `proxy_scheme: socks5` when the en
 - `interval_seconds`: delay after one full probe cycle finishes. Default: `120`. A ticket only lives minutes now, so a 30-minute interval leaves long stretches of requests going out bare.
 - `probe_schedule`: `fixed` probes on a constant interval; `state_aware` skips periodic probes while a fresh state is cached and only resumes shortly before expiry; `on_demand` probes only when a request needs it. Default: `state_aware`.
 - `probe_lead_seconds`: lead time before state expiry used by `state_aware`/`on_demand`. Default: `180`. Set it to `0` to drive the same threshold from `state_refresh_seconds` instead.
-- `target_state_length`: required state length. Default: `292`.
-- `accepted_blocks`: the admission filter for tickets. Only states whose Fernet block count appears here are cached and injected. Default: `[10, 12]` — `10` ≈ 292 characters (Pro/Plus), `12` ≈ 332 (Team/business). `11` ≈ 312 is the shape proxied or throttled exits commonly return, so it is rejected by default: it can never displace the known-good 292 ticket you already hold. Add `11` only once 312 is confirmed as a legitimate shape for your models. Valid Fernet states use block count first; non-Fernet states fall back to `target_state_length`. Rejections are reported with the received length and block count so the choice is visible.
+(`target_state_length` and `accepted_blocks` were removed in 0.6.3: the status page shows `收票门槛: 不限`.)
 - `ttl_seconds`: maximum cache age for injection. Default: `300` (five minutes). A measured 292 only survived about 200 seconds, so a shorter default is the safer one: injecting an expired ticket cannot make an answer better. The status page reports the measured combo lifetime so the value can be tuned from data.
-- `inject_cookies`: send the account-level routing cookies together with the state. Default: `true`. **The cookies only reach the upstream when the auth file declares `"headers": {"Cookie": "$Cookie"}`** — see the requirement section above.
+- `inject_cookies`: send the account-level routing cookies. Default: `true`. Cookies no longer depend on a cached ticket: they are injected even when the cache is empty (the injection log records the source as `cookie-only`). **The cookies only reach the upstream when the auth file declares `"headers": {"Cookie": "$Cookie"}`** — see the requirement section above.
 - `harvest_cookies`: collect `__cflb`/`__oailb` from upstream responses (production traffic and probes). Default: `true`. Only those two names are ever read, stored or displayed.
 - `probe_send_cookies`: make probes carry the account's current live routing cookies. Default: `false` — a probe is a cold request. The jar is keyed by account while probes rotate egresses, so re-sending a cookie captured on one exit from another exit asks the upstream for a ticket for a route the connection is not on, which is a known 312 source. A cold probe cannot contradict itself and its response still hands back the fresh ticket plus its cookie pair; turn this on only to mirror production traffic on probes. The status page chip `探测凭据` shows which mode is active and every probe log line records `cookies_sent`.
 - `cookie_ttl_seconds`: hard cap on how long a routing cookie is kept. Default: `300`. A shorter upstream `Max-Age`/`Expires` wins.
-- `invalidate_on_reject`: default `true`. When a request that carried our injected state comes back with a state the plugin rejects (a 312, for example), the cached entry is dropped immediately and a reprobe is queued. Bare requests cannot trigger this, so their 312s never retire a good ticket.
+(0.6.3 removed `invalidate_on_reject`: it rested on "an unexpected shape means the upstream refused the ticket", and measurement retired that criterion.)
 - `state_refresh_seconds`: age at which a cached ticket counts as renewable for `state_aware`/`on_demand`. Default: `0`, meaning `probe_lead_seconds` decides.
 - `inject`: inject fresh cached state into matching requests. Default: `true`.
 - `harvest`: collect matching state from normal Codex traffic. Default: `true`.
@@ -125,7 +122,7 @@ For SOCKS5-only providers such as BestGo, set `proxy_scheme: socks5` when the en
 - `show_state_values`: display and retain future full state values in the status page/JSON probe log. Default: `false`; enable only on a protected management endpoint.
 - `probe_log_limit`: maximum in-memory attempt records. Default: `200`, maximum: `1000`.
 - `max_probe_attempts`: attempts per auth/model in one cycle. Default: `3`.
-- `attempts_per_route`: how many times one egress is tried before the probe moves on to the next one, inside the `max_probe_attempts` budget. Raise it when a single attempt per egress keeps returning a rejected state length, since a second request over the same egress often returns an accepted one. Default: `1`, maximum: `10`.
+- `attempts_per_route`: how many times one egress is tried before the probe moves on to the next one, inside the `max_probe_attempts` budget. Retries are driven by a failed attempt (no state, non-2xx, transport error), no longer by an unexpected length. Default: `1`, maximum: `10`.
 - `failure_reprobe_threshold`: consecutive production request failures inside the current state window that trigger a targeted reprobe. Default: `3`; a negative value disables this behavior.
 - `max_output_tokens`: deprecated compatibility field. It is ignored because Codex upstream rejects token-limit parameters.
 - `prompt`: minimal probe input. Default: `.`.
@@ -140,7 +137,17 @@ Measured on one account and egress: the ticket and the cookies are independent. 
 - Tickets and cookies do not need to be paired: swapping tickets inside one conversation works, and deliberate mismatches work too. The plugin therefore keeps one cookie pool per **account** and reuses the newest live pair for every model.
 - Cookies expire on their own, and they are the more likely half to die first. The plugin tracks ticket age and cookie age separately and reports the last invalidation reason per model.
 
-The defaults work together: `state_aware` renewal, `invalidate_on_reject`, and cold probes that mint a fresh ticket and cookie pair instead of recycling the previous one. The moment the upstream refuses the ticket we just injected, it is dropped and reprobed instead of being injected until the TTL runs out.
+The defaults work together: `state_aware` renewal and cold probes that mint a fresh ticket and cookie pair instead of recycling the previous one. Tickets live until `ttl_seconds`; 0.6.3 removed "upstream refused our ticket" invalidation because the criterion behind it (an unexpected shape) tracks the response shape, not the ticket's fate.
+
+### Why the shape filter is gone (0.6.3)
+
+0.6.0–0.6.2 had an admission filter: only states whose Fernet block count appeared in `accepted_blocks` (default `[10, 12]`, i.e. 292/332) were cached, and a 312 (11 blocks) was read as the upstream refusing the ticket. Measurement retired that premise:
+
+- **The shape changes on its own.** The same gateway with the same routing cookie returned 292 on one request and 312 two minutes later.
+- **The shape is not carryable.** Injecting a captured 292 back never returned that 292 (3 pairs out of 3 changed the ticket; the control group without any state behaved identically).
+- **Length tracks whether that turn produced reasoning content.** 312 responses carry a `reasoning` output item with an encrypted reasoning block, 292 responses do not; neither tracks which gateway served the request.
+
+The consequence was harsh: while the upstream was handing back 312 everywhere, the filter failed **every probe** and invalidated the cache on **every production request**, so the ticket pool could never fill. 0.6.3 removes the filter, and removes `invalidate_on_reject` with it since it rested on the same criterion. Tickets now live until `ttl_seconds`; length and block count stay visible on the status page as diagnostics.
 
 ### Requirement: the account must forward cookies
 
@@ -214,7 +221,6 @@ That text is the redacted fallback used only when the plugin cannot safely echo 
 | --- | --- |
 | `未配置代理，且 direct_probe 未开启` | Probing needs an egress. Add a proxy, or enable `direct_probe` (on by default since 0.6) for direct-only probing. |
 | `代理配置里没有一条能解析` | Fill one `host:port:user:password` per line (credentials optional) or paste a JSON array. Unparsable lines are skipped and logged with their line number. |
-| `上游返回的 state 未被接受（长度 312 / 块 11）` | That egress returned a shape outside the admission filter (292/332 by default). This is expected: the plugin keeps injecting the previous accepted ticket and the probe moves to the next egress. Add `11` to `accepted_blocks` only if 312 is confirmed usable. |
 | `探测出口连接失败` | The proxy is unreachable, throttled, or the scheme is wrong (SOCKS5-only providers such as BestGo need `proxy_scheme: socks5`). See logs for the egress and cause. |
 | `上游返回 HTTP 4xx/5xx` | Upstream rejected the probe; the account backs off per `error_aware_backoff` / `quota_backoff_seconds`. |
 
@@ -271,8 +277,8 @@ without injection. `probe: false` and `probe_auth_ids` still govern probing.
 
 `use_issued_at` decodes the public Fernet envelope (version, timestamp and block
 layout), without decrypting or verifying its HMAC. It rejects malformed, expired
-and implausibly future-dated state, and stops injecting expired state. Length is
-still checked against `target_state_length`. All other modes keep the historical
+and implausibly future-dated state, and stops injecting expired state. Those are
+envelope-level checks and say nothing about length. All other modes keep the historical
 expired-state fallback. Restoring persisted state always preserves `StoredAt`,
 including manual entries; enabling timestamp checking also reparses its issue
 time, so restarting cannot renew the token's lifetime.

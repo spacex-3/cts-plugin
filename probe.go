@@ -227,15 +227,13 @@ func (rt *pluginRuntime) probeDirectBaseline(ctx context.Context, target probeTa
 		})
 		return
 	}
-	targetMatch := cfg.stateAccepted(state)
-	errText := ""
-	if !targetMatch {
-		errText = fmt.Sprintf("turn state rejected (length %d, blocks %s)", len(strings.TrimSpace(state)), stateBlocksText(state))
-	}
-	rt.recordProbeAttempt(target, "direct", 0, state, targetMatch, false, errText)
-	if targetMatch {
-		rt.observeState(target.AuthID, target.Model, state, "direct")
-	}
+	// Every state the upstream returns is admitted. Length and block count are
+	// recorded on the status page, never used to refuse a ticket: the shape of a
+	// state says which turn it came from (reasoning content or not), not whether
+	// it is usable, and refusing a shape we did not expect throws away a ticket
+	// that works.
+	rt.recordProbeAttempt(target, "direct", 0, state, true, false, "")
+	rt.observeState(target.AuthID, target.Model, state, "direct")
 }
 
 func (rt *pluginRuntime) probeTargetOnce(ctx context.Context, target probeTarget, cfg pluginConfig, proxies []string) {
@@ -266,17 +264,10 @@ func (rt *pluginRuntime) probeTargetOnce(ctx context.Context, target probeTarget
 				}
 				continue
 			}
-			targetMatch := cfg.stateAccepted(state)
-			errText := ""
-			if !targetMatch {
-				errText = fmt.Sprintf("turn state rejected (length %d, blocks %s)", len(strings.TrimSpace(state)), stateBlocksText(state))
-			}
-			rt.recordProbeAttempt(target, "direct", attempt, state, targetMatch, false, errText)
-			if targetMatch {
-				if rt.observeState(target.AuthID, target.Model, state, "direct") {
-					rt.resetProbeMiss(makeCacheKey(target.AuthID, target.Model))
-					return
-				}
+			rt.recordProbeAttempt(target, "direct", attempt, state, true, false, "")
+			if rt.observeState(target.AuthID, target.Model, state, "direct") {
+				rt.resetProbeMiss(makeCacheKey(target.AuthID, target.Model))
+				return
 			}
 		}
 	}
@@ -342,10 +333,10 @@ func (rt *pluginRuntime) probeTargetWithProxies(ctx context.Context, proxies []s
 			})
 			return
 		}
-		lastErr = fmt.Errorf("turn state rejected (length %d, blocks %s)", len(strings.TrimSpace(state)), stateBlocksText(state))
+		lastErr = fmt.Errorf("probe returned no usable turn state (length %d, blocks %s)", len(strings.TrimSpace(state)), stateBlocksText(state))
 		rt.recordProbeAttemptWithProxy(target, "proxy", proxyLabel, attempt, state, false, false, lastErr.Error())
 		rt.recordProbe(target, state, false, lastErr.Error())
-		rt.host.Log("info", "codex-turn-state: probe turn state rejected", map[string]any{
+		rt.host.Log("info", "codex-turn-state: probe state not stored", map[string]any{
 			"auth_id":      target.AuthID,
 			"model":        target.Model,
 			"length":       len(strings.TrimSpace(state)),

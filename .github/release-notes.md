@@ -1,17 +1,23 @@
-Probes now go out cold by default. A probe is how a fresh ticket is minted, and it must not recycle a routing cookie captured somewhere else.
+The admission filter is gone. Any state the upstream returns is now cached and injected, and routing cookies no longer wait for a ticket.
 
-## Changed in v0.6.2
+## The measurement behind this release
 
-- **`probe_send_cookies` now defaults to `false`.** The cookie jar is keyed by account while probes rotate egresses, so a probe that carried a cookie captured on exit A while connecting from exit B asked the upstream for a ticket for a route the connection was not on — the shape that answers 312. A cold probe cannot contradict itself, and its response still hands back the fresh ticket *and* its cookie pair, which is captured as before whenever `harvest_cookies` is on. Set `probe_send_cookies: true` only to make probes mirror production traffic exactly.
+0.6.0–0.6.2 accepted a ticket only when its Fernet block count appeared in `accepted_blocks` (default `[10, 12]` ≈ 292/332). A 312 (11 blocks) was read as *the upstream refusing the ticket we injected*, and the cache entry was dropped on that very response. Three observations retired that premise:
 
-## Added in v0.6.2
+- **The shape changes on its own.** The same gateway, the same routing cookie and the same two-minute window returned 292 on one request and 312 on the next. Two gateways flipped in opposite directions within the same minute.
+- **The shape is not carryable.** Injecting a captured 292 back never returned that 292 — 3 pairs out of 3 changed the ticket, and the control group without any state behaved identically. Even a captured 312 came back as a different 312.
+- **Length tracks whether that turn produced reasoning content.** 312 responses carry a `reasoning` output item with an encrypted reasoning block (`gAAAAA…`) and 13–24 reasoning tokens; 292 responses carry none. It never tracked which gateway served the request, which is what a routing metric would have to do.
 
-- **Status page chip `探测凭据`**: `冷启动（不带 Cookie）` or `携带 Cookie（热启动）` — the first thing to look at when every proxied probe answers 312.
-- **Every probe log line records `cookies_sent`** (captured ticket, rejected ticket, direct and proxied failures), so the log states whether that attempt actually carried cookies instead of leaving it to inference. `grep codex-turn-state <CPA>/logs/main.log` is enough.
+## Changed in v0.6.3
+
+- **No admission filter.** `accepted_blocks` and `target_state_length` are gone, along with the "turn state rejected (length …, blocks …)" error path. That error fired on **every** probe while the upstream was handing back 312 everywhere, which is why probing showed `Operation failed; inspect local plugin logs for details` and the ticket pool stayed empty. Length and block count are still reported on the status page (chip `收票门槛: 不限`) as diagnostics, never as gates.
+- **Cookies no longer wait for a ticket.** The interceptor used to short-circuit when the cache was empty, so a request between two successful probes carried neither the state nor the cookies that had already been captured. Now the Cookie header is built and injected independently; the injection log records the source as `cookie-only` so the two paths stay distinguishable.
+- **`invalidate_on_reject` removed.** It only ever fired on a shape mismatch, so it retired working tickets — and in today's upstream mode it would have invalidated on every single request. Tickets now live until `ttl_seconds`, and the cookie pool ages out on `cookie_ttl_seconds`. The combo-lifetime table keeps reporting TTL-driven expiries.
+- **Retries are failure-driven.** `attempts_per_route` and `max_probe_attempts` still apply, but they retry on a failed attempt (no state, non-2xx, transport error) rather than on an unexpected length. The first state that comes back wins.
 
 ## Unchanged
 
-Everything from 0.6.1 still applies: cookies are captured and injected with the state, the injection table shows the `Cookie 请求头` column, and the upstream only receives cookies once each Codex auth file declares `"headers": { "Cookie": "$Cookie" }` — the status page banners the accounts that still lack it.
+Everything from 0.6.1 and 0.6.2 still applies: cold probes by default, the `探测凭据` chip, `cookies_sent` on every probe log line, the `Cookie 请求头` column in the injection table, and the requirement that each Codex auth file declares `"headers": { "Cookie": "$Cookie" }` before the upstream receives any cookie at all — the status page banners the accounts that still lack it.
 
 ## Install with CPA
 

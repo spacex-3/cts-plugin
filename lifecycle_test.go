@@ -33,7 +33,7 @@ func isolatedRuntime(t *testing.T, cfg pluginConfig) *pluginRuntime {
 	r := newRuntime()
 	r.config = normalizeConfig(cfg)
 	r.host = noopHost{}
-	r.cache = newStateCache(r.config.ttl(), r.config.targetLength(), r.now)
+	r.cache = newStateCache(r.config.ttl(), r.now)
 	r.cache.configureIssuedAt(cfg.UseIssuedAt)
 	t.Cleanup(r.shutdown)
 	return r
@@ -51,14 +51,14 @@ func TestFernetFreshnessAndValidation(t *testing.T) {
 			t.Fatalf("issued=%v err=%v", issued, err)
 		}
 	}
-	cache := newStateCache(time.Hour, 292, func() time.Time { return now })
+	cache := newStateCache(time.Hour, func() time.Time { return now })
 	cache.configureIssuedAt(true)
 	for name, token := range map[string]string{"old": syntheticState(now.Add(-time.Hour)), "future": syntheticState(now.Add(2 * time.Minute)), "invalid": strings.Repeat("x", 292), "version": base64.URLEncoding.EncodeToString(make([]byte, 217))} {
-		if cache.putIfTarget("a", name, token, "probe") {
+		if cache.putState("a", name, token, "probe") {
 			t.Fatalf("accepted %s", name)
 		}
 	}
-	if !cache.putIfTarget("a", "m", fresh, "probe") {
+	if !cache.putState("a", "m", fresh, "probe") {
 		t.Fatal("fresh state rejected")
 	}
 	entry, _ := cache.lookup("a", "m")
@@ -66,7 +66,7 @@ func TestFernetFreshnessAndValidation(t *testing.T) {
 		t.Fatalf("remaining=%s", got)
 	}
 	now = now.Add(5 * time.Minute)
-	cache.putIfTarget("a", "m", fresh, "probe")
+	cache.putState("a", "m", fresh, "probe")
 	entry, _ = cache.lookup("a", "m")
 	if cache.remaining(entry) != 5*time.Minute {
 		t.Fatal("repeat observation rejuvenated state")
@@ -77,7 +77,7 @@ func TestFernetFreshnessAndValidation(t *testing.T) {
 	}
 }
 
-func TestAcceptedBlocksCoversProNewEraAndTeam(t *testing.T) {
+func TestEveryStateShapeIsAdmitted(t *testing.T) {
 	now := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
 	build := func(blocks int) string {
 		raw := make([]byte, 57+blocks*16)
@@ -86,6 +86,7 @@ func TestAcceptedBlocksCoversProNewEraAndTeam(t *testing.T) {
 		return base64.URLEncoding.EncodeToString(raw)
 	}
 
+	// The Fernet geometry still holds: 10/11/12 blocks are 292/312/332.
 	if length, _ := blockStateLength(10); length != 292 {
 		t.Fatalf("10 blocks = %d, want 292", length)
 	}
@@ -93,29 +94,16 @@ func TestAcceptedBlocksCoversProNewEraAndTeam(t *testing.T) {
 		t.Fatalf("11 blocks = %d, want 312", length)
 	}
 
-	cache := newStateCache(time.Hour, 292, func() time.Time { return now })
-	for name, blocks := range map[string]int{"pro": 10, "team": 12} {
-		if !cache.putIfTarget("a", name, build(blocks), "probe") {
-			t.Fatalf("%d-block state should be accepted by default", blocks)
+	// 0.6.3 admits every shape. Until 0.6.2 an 11-block (312) state was refused as
+	// "the upstream rejected our ticket". Measurement retired that reading: the
+	// block count tracks whether that turn carried reasoning content, so the
+	// filter discarded working tickets — and in the shape the upstream hands back
+	// today it refused every single response.
+	cache := newStateCache(time.Hour, func() time.Time { return now })
+	for name, blocks := range map[string]int{"pro": 10, "throttled": 11, "team": 12, "short": 9, "long": 13} {
+		if !cache.putState("a", name, build(blocks), "probe") {
+			t.Fatalf("%d-block state must be admitted", blocks)
 		}
-	}
-	// 312 is what throttled or proxied exits hand back; it must not displace a
-	// known-good 292 ticket unless the operator opts in.
-	if cache.putIfTarget("a", "throttled", build(11), "probe") {
-		t.Fatal("11-block state should be rejected by default")
-	}
-	for _, blocks := range []int{9, 13} {
-		if cache.putIfTarget("a", "bad", build(blocks), "probe") {
-			t.Fatalf("%d-block state should be rejected by default", blocks)
-		}
-	}
-
-	optingIn := pluginConfig{AcceptedBlocks: []int{10, 11, 12}}
-	if !optingIn.stateAccepted(build(11)) {
-		t.Fatal("accepted_blocks [10,11,12] must accept 11 blocks")
-	}
-	if describeAcceptedBlocks(optingIn.acceptedBlocks()) != "10≈292 / 11≈312 / 12≈332" {
-		t.Fatalf("labels = %q", describeAcceptedBlocks(optingIn.acceptedBlocks()))
 	}
 }
 
@@ -130,7 +118,7 @@ func TestRestorePreservesAgeForProbeAndManual(t *testing.T) {
 			r.mu.Lock()
 			r.persistLocked()
 			r.mu.Unlock()
-			r.cache = newStateCache(time.Hour, 292, r.now)
+			r.cache = newStateCache(time.Hour, r.now)
 			r.cache.configureIssuedAt(issuedMode)
 			restorePersistedRuntimeLocked(r, r.config)
 			got, ok := r.cache.lookup("a", "m")
@@ -174,7 +162,7 @@ func TestStrictProbeDoesNotTrustHeadersBeforeCompletion(t *testing.T) {
 }
 
 func TestStrictHarvestWaitsForRequestCompletion(t *testing.T) {
-	r := isolatedRuntime(t, pluginConfig{Models: []string{"m"}, TargetStateLength: 3, RequireCompleted: true})
+	r := isolatedRuntime(t, pluginConfig{Models: []string{"m"}, RequireCompleted: true})
 	withTestRuntime(t, r)
 	req := pluginapi.StreamChunkInterceptRequest{RequestID: "one", Model: "m", Metadata: map[string]any{cliproxyexecutor.SelectedAuthMetadataKey: "a"}, Body: []byte("data: {\"headers\":{\"x-codex-turn-state\":\"abc\"}}\n\n")}
 	harvestFromStream(req)
@@ -230,7 +218,7 @@ func (c *controlledTransport) Do(ctx context.Context, _ string, _ *http.Request)
 	return &http.Response{StatusCode: 200, Header: http.Header{turnStateHeader: []string{"abc"}}, Body: io.NopCloser(strings.NewReader(""))}, nil
 }
 func demandRuntime(t *testing.T, wait int) (*pluginRuntime, *controlledTransport) {
-	r := isolatedRuntime(t, pluginConfig{Models: []string{"m"}, TargetStateLength: 3, ProbeSchedule: "on_demand", Proxy: "http://proxy.example:8080", ProbeWaitMilliseconds: wait, MaxProbeAttempts: 1})
+	r := isolatedRuntime(t, pluginConfig{Models: []string{"m"}, ProbeSchedule: "on_demand", Proxy: "http://proxy.example:8080", ProbeWaitMilliseconds: wait, MaxProbeAttempts: 1})
 	r.host = &targetListHost{files: []pluginapi.HostAuthFileEntry{{ID: "a", AuthIndex: "i", Provider: "codex"}}, auths: map[string]pluginapi.HostAuthGetResponse{"i": {JSON: json.RawMessage(`{"access_token":"synthetic"}`)}}}
 	transport := &controlledTransport{entered: make(chan struct{}, 4), release: make(chan struct{})}
 	r.transport = transport
@@ -359,7 +347,7 @@ func TestFailureClassificationAndAccountBackoff(t *testing.T) {
 }
 
 func TestQuotaStopsProbeAttemptsAndRotatingProxyStart(t *testing.T) {
-	r := isolatedRuntime(t, pluginConfig{TargetStateLength: 3, MaxProbeAttempts: 3, ErrorAwareBackoff: true})
+	r := isolatedRuntime(t, pluginConfig{MaxProbeAttempts: 3, ErrorAwareBackoff: true})
 	transport := &countFailureTransport{}
 	r.transport = transport
 	target := probeTarget{AuthID: "a", Model: "m", BaseURL: "https://example.test"}
@@ -461,7 +449,7 @@ func (f probeTransportFunc) Do(ctx context.Context, proxy string, req *http.Requ
 
 func TestTransientProbeRetriesAndConcurrentQuotaStopsRetries(t *testing.T) {
 	for _, quotaDuringRequest := range []bool{false, true} {
-		r := isolatedRuntime(t, pluginConfig{TargetStateLength: 3, MaxProbeAttempts: 3, ErrorAwareBackoff: true})
+		r := isolatedRuntime(t, pluginConfig{MaxProbeAttempts: 3, ErrorAwareBackoff: true})
 		calls := 0
 		r.transport = probeTransportFunc(func(context.Context, string, *http.Request) (*http.Response, error) {
 			calls++
@@ -486,7 +474,7 @@ func TestTransientProbeRetriesAndConcurrentQuotaStopsRetries(t *testing.T) {
 
 func TestRestoreDropsEntriesAlreadyPastStoredAtTTL(t *testing.T) {
 	now := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
-	r := isolatedRuntime(t, pluginConfig{TargetStateLength: 3, TTLSeconds: 3600})
+	r := isolatedRuntime(t, pluginConfig{TTLSeconds: 3600})
 	r.nowFunc = func() time.Time { return now }
 	r.cache.restore(cacheEntry{AuthID: "a", Model: "m", State: "abc", StoredAt: now.Add(-time.Hour), Source: "probe"})
 	if _, ok := r.cache.lookup("a", "m"); ok {

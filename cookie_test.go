@@ -92,13 +92,12 @@ func TestApplyAfterAuthInjectsCookiesNextToState(t *testing.T) {
 	now := time.Date(2026, time.September, 21, 9, 0, 0, 0, time.UTC)
 	probe := false
 	r := isolatedRuntime(t, pluginConfig{
-		AuthIDs:           []string{"auth-1"},
-		Models:            []string{"model-1"},
-		Probe:             &probe,
-		TargetStateLength: 3,
+		AuthIDs: []string{"auth-1"},
+		Models:  []string{"model-1"},
+		Probe:   &probe,
 	})
 	r.nowFunc = func() time.Time { return now }
-	r.cache = newStateCache(time.Hour, 3, r.now)
+	r.cache = newStateCache(time.Hour, r.now)
 	r.cookies = newCookieJar(time.Hour, r.now)
 
 	header := http.Header{}
@@ -107,7 +106,7 @@ func TestApplyAfterAuthInjectsCookiesNextToState(t *testing.T) {
 	if updated := r.observeCookies("auth-1", "harvest", "request", header); updated != 2 {
 		t.Fatalf("stored cookies = %d, want 2", updated)
 	}
-	if !r.cache.putIfTarget("auth-1", "model-1", "abc", "harvest") {
+	if !r.cache.putState("auth-1", "model-1", "abc", "harvest") {
 		t.Fatal("failed to seed the cache")
 	}
 	withTestRuntime(t, r)
@@ -131,30 +130,25 @@ func TestApplyAfterAuthInjectsCookiesNextToState(t *testing.T) {
 	if stats.Injections != 1 || stats.InjectionsWithCookie != 1 {
 		t.Fatalf("counters = %+v, want one injection with cookies", stats)
 	}
-	record, ok := r.takeInjectedRequest("req-1")
-	if !ok || record.Key != makeCacheKey("auth-1", "model-1") || !record.HadCookie {
-		t.Fatalf("injection ledger = %#v ok=%t", record, ok)
-	}
 }
 
 func TestApplyAfterAuthSkipsCookiesWhenDisabled(t *testing.T) {
 	now := time.Date(2026, time.September, 21, 9, 0, 0, 0, time.UTC)
 	probe, cookies := false, false
 	r := isolatedRuntime(t, pluginConfig{
-		AuthIDs:           []string{"auth-1"},
-		Models:            []string{"model-1"},
-		Probe:             &probe,
-		InjectCookies:     &cookies,
-		TargetStateLength: 3,
+		AuthIDs:       []string{"auth-1"},
+		Models:        []string{"model-1"},
+		Probe:         &probe,
+		InjectCookies: &cookies,
 	})
 	r.nowFunc = func() time.Time { return now }
-	r.cache = newStateCache(time.Hour, 3, r.now)
+	r.cache = newStateCache(time.Hour, r.now)
 	r.cookies = newCookieJar(time.Hour, r.now)
 
 	header := http.Header{}
 	header.Add("Set-Cookie", "__cflb=cf")
 	r.observeCookies("auth-1", "harvest", "request", header)
-	r.cache.putIfTarget("auth-1", "model-1", "abc", "harvest")
+	r.cache.putState("auth-1", "model-1", "abc", "harvest")
 	withTestRuntime(t, r)
 
 	resp := applyAfterAuth(pluginapi.RequestInterceptRequest{
@@ -167,83 +161,109 @@ func TestApplyAfterAuthSkipsCookiesWhenDisabled(t *testing.T) {
 	}
 }
 
-func TestRejectedHarvestInvalidatesOnlyInjectedRequests(t *testing.T) {
-	now := time.Date(2026, time.September, 21, 9, 0, 0, 0, time.UTC)
+// 0.6.3: routing cookies are account-level credentials and no longer depend on a
+// cached ticket. Until 0.6.2 an empty cache short-circuited the whole interceptor,
+// so every request between two successful probes went out with neither the state
+// nor the cookies we had already captured.
+func TestCookiesAreInjectedEvenWithoutACachedTicket(t *testing.T) {
+	now := time.Date(2026, time.September, 23, 9, 0, 0, 0, time.UTC)
 	probe := false
 	r := isolatedRuntime(t, pluginConfig{
-		AuthIDs:           []string{"auth-1"},
-		Models:            []string{"model-1"},
-		Probe:             &probe,
-		TargetStateLength: 3,
+		AuthIDs: []string{"auth-1"},
+		Models:  []string{"model-1"},
+		Probe:   &probe,
 	})
 	r.nowFunc = func() time.Time { return now }
-	r.cache = newStateCache(time.Hour, 3, r.now)
-	r.observeState("auth-1", "model-1", "abc", "harvest")
-	withTestRuntime(t, r)
-
-	// A request that never carried our ticket says nothing about the cache.
-	r.harvestHarvestedState("unknown-request", "auth-1", "model-1", "rejected-state")
-	if _, ok := r.cache.lookup("auth-1", "model-1"); !ok {
-		t.Fatal("a bare request's rejection must not retire the cached ticket")
-	}
-
-	applyAfterAuth(pluginapi.RequestInterceptRequest{
-		RequestID: "req-1",
-		ToFormat:  "codex",
-		Model:     "model-1",
-		Metadata:  map[string]any{cliproxyexecutor.SelectedAuthMetadataKey: "auth-1"},
-	})
-	r.harvestHarvestedState("req-1", "auth-1", "model-1", "rejected-state")
-
-	if _, ok := r.cache.lookup("auth-1", "model-1"); ok {
-		t.Fatal("the refused ticket should be dropped from the cache")
-	}
-	combo := r.snapshotStatus().Combos[makeCacheKey("auth-1", "model-1")]
-	if combo.Invalidations != 1 || combo.LastInvalidatedBy != "state" {
-		t.Fatalf("combo = %+v, want one state-driven invalidation", combo)
-	}
-}
-
-func TestComboInvalidationBlamesTheOlderCookie(t *testing.T) {
-	start := time.Date(2026, time.September, 21, 9, 0, 0, 0, time.UTC)
-	now := start
-	probe := false
-	r := isolatedRuntime(t, pluginConfig{
-		AuthIDs:           []string{"auth-1"},
-		Models:            []string{"model-1"},
-		Probe:             &probe,
-		TargetStateLength: 3,
-	})
-	r.nowFunc = func() time.Time { return now }
-	r.cache = newStateCache(time.Hour, 3, r.now)
+	r.cache = newStateCache(time.Hour, r.now)
 	r.cookies = newCookieJar(time.Hour, r.now)
 
 	header := http.Header{}
 	header.Add("Set-Cookie", "__cflb=cf")
-	r.observeCookies("auth-1", "harvest", "request", header)
-
-	// The cookie is minutes old by the time a ticket is stored and injected.
-	now = start.Add(120 * time.Second)
-	r.observeState("auth-1", "model-1", "abc", "harvest")
+	header.Add("Set-Cookie", "__oailb=oa")
+	if updated := r.observeCookies("auth-1", "harvest", "request", header); updated != 2 {
+		t.Fatalf("stored cookies = %d, want 2", updated)
+	}
 	withTestRuntime(t, r)
-	applyAfterAuth(pluginapi.RequestInterceptRequest{
+
+	resp := applyAfterAuth(pluginapi.RequestInterceptRequest{
 		RequestID: "req-1",
 		ToFormat:  "codex",
 		Model:     "model-1",
 		Metadata:  map[string]any{cliproxyexecutor.SelectedAuthMetadataKey: "auth-1"},
 	})
-
-	now = start.Add(150 * time.Second)
-	r.harvestHarvestedState("req-1", "auth-1", "model-1", "refused-state")
-
-	combo := r.snapshotStatus().Combos[makeCacheKey("auth-1", "model-1")]
-	if combo.LastInvalidatedBy != "cookie" {
-		t.Fatalf("invalidated by %q, want cookie (the cookie was older than the ticket)", combo.LastInvalidatedBy)
+	if got := resp.Headers.Get(turnStateHeader); got != "" {
+		t.Fatalf("no ticket was cached, yet state %q was injected", got)
 	}
-	if combo.LastLifetime < 29 || combo.LastLifetime > 31 {
-		t.Fatalf("combo lifetime = %.1fs, want about 30s", combo.LastLifetime)
+	if got := resp.Headers.Get("Cookie"); got != "__cflb=cf; __oailb=oa" {
+		t.Fatalf("cookie = %q, want the captured routing cookies", got)
+	}
+	snap := r.snapshotStatus()
+	if len(snap.Injections) != 1 || snap.Injections[0].Source != cookieOnlySource {
+		t.Fatalf("injection log = %#v, want one %s entry", snap.Injections, cookieOnlySource)
+	}
+	stats := snap.TicketStats[makeCacheKey("auth-1", "model-1")]
+	if stats.Injections != 1 || stats.InjectionsWithCookie != 1 {
+		t.Fatalf("counters = %+v, want one injection with cookies", stats)
 	}
 }
+
+// With nothing captured at all the request stays bare, and that is still counted
+// so the status page can tell "no ticket" from "no ticket and no cookies".
+func TestBareRequestWhenNothingWasCaptured(t *testing.T) {
+	probe := false
+	r := isolatedRuntime(t, pluginConfig{
+		AuthIDs: []string{"auth-1"},
+		Models:  []string{"model-1"},
+		Probe:   &probe,
+	})
+	r.cache = newStateCache(time.Hour, r.now)
+	r.cookies = newCookieJar(time.Hour, r.now)
+	withTestRuntime(t, r)
+
+	resp := applyAfterAuth(pluginapi.RequestInterceptRequest{
+		RequestID: "req-1",
+		ToFormat:  "codex",
+		Model:     "model-1",
+		Metadata:  map[string]any{cliproxyexecutor.SelectedAuthMetadataKey: "auth-1"},
+	})
+	if got := resp.Headers.Get("Cookie"); got != "" {
+		t.Fatalf("nothing was captured, yet cookie %q was injected", got)
+	}
+	stats := r.snapshotStatus().TicketStats[makeCacheKey("auth-1", "model-1")]
+	if stats.Bare != 1 {
+		t.Fatalf("bare counter = %d, want 1", stats.Bare)
+	}
+}
+
+func TestHarvestedStatesAreNeverTreatedAsRejections(t *testing.T) {
+	now := time.Date(2026, time.September, 21, 9, 0, 0, 0, time.UTC)
+	probe := false
+	r := isolatedRuntime(t, pluginConfig{
+		AuthIDs: []string{"auth-1"},
+		Models:  []string{"model-1"},
+		Probe:   &probe,
+	})
+	r.nowFunc = func() time.Time { return now }
+	r.cache = newStateCache(time.Hour, r.now)
+	r.observeState("auth-1", "model-1", "abc", "harvest")
+	withTestRuntime(t, r)
+
+	// Until 0.6.2 a harvested shape outside accepted_blocks dropped the ticket.
+	// That criterion is gone: a harvested state only ever replaces the entry, and
+	// a different shape is stored exactly like the first.
+	r.observeState("auth-1", "model-1", "a-completely-different-shape", "harvest")
+	entry, ok := r.cache.lookup("auth-1", "model-1")
+	if !ok || entry.State != "a-completely-different-shape" {
+		t.Fatalf("harvested entry = %#v ok=%t", entry, ok)
+	}
+	combo := r.snapshotStatus().Combos[makeCacheKey("auth-1", "model-1")]
+	if combo.Invalidations != 0 {
+		t.Fatalf("harvest must not invalidate anything, combo = %+v", combo)
+	}
+} // The "which side died, the state or the cookie" attribution went away with
+// invalidate_on_reject: it only existed to explain a shape mismatch, and the
+// shape is not a death signal. What remains is the TTL path, covered by
+// TestCacheExpiryBooksTheComboLifetime.
 
 func TestCacheExpiryBooksTheComboLifetime(t *testing.T) {
 	now := time.Date(2026, time.September, 21, 9, 0, 0, 0, time.UTC)
@@ -300,10 +320,9 @@ func TestProbeSendsLiveCookiesAndCapturesNewOnes(t *testing.T) {
 	now := time.Date(2026, time.September, 21, 9, 0, 0, 0, time.UTC)
 	probe, send := false, true
 	r := isolatedRuntime(t, pluginConfig{
-		Models:            []string{"model-1"},
-		Probe:             &probe,
-		ProbeSendCookies:  &send,
-		TargetStateLength: 3,
+		Models:           []string{"model-1"},
+		Probe:            &probe,
+		ProbeSendCookies: &send,
 	})
 	r.nowFunc = func() time.Time { return now }
 	r.cookies = newCookieJar(time.Hour, r.now)
@@ -345,9 +364,8 @@ func TestProbesGoOutColdByDefault(t *testing.T) {
 	now := time.Date(2026, time.September, 21, 9, 0, 0, 0, time.UTC)
 	probe := false
 	r := isolatedRuntime(t, pluginConfig{
-		Models:            []string{"model-1"},
-		Probe:             &probe,
-		TargetStateLength: 3,
+		Models: []string{"model-1"},
+		Probe:  &probe,
 	})
 	if r.configSnapshot().probeSendCookiesEnabled() {
 		t.Fatal("probe cookies should be off by default")
@@ -384,10 +402,9 @@ func TestProbeCanSkipCookies(t *testing.T) {
 	now := time.Date(2026, time.September, 21, 9, 0, 0, 0, time.UTC)
 	probe, send := false, false
 	r := isolatedRuntime(t, pluginConfig{
-		Models:            []string{"model-1"},
-		Probe:             &probe,
-		ProbeSendCookies:  &send,
-		TargetStateLength: 3,
+		Models:           []string{"model-1"},
+		Probe:            &probe,
+		ProbeSendCookies: &send,
 	})
 	r.nowFunc = func() time.Time { return now }
 	r.cookies = newCookieJar(time.Hour, r.now)
@@ -410,10 +427,9 @@ func TestStatusPageNeverRendersCookieValues(t *testing.T) {
 	now := time.Date(2026, time.September, 21, 9, 0, 0, 0, time.UTC)
 	probe := false
 	r := isolatedRuntime(t, pluginConfig{
-		AuthIDs:           []string{"auth-1"},
-		Models:            []string{"model-1"},
-		Probe:             &probe,
-		TargetStateLength: 3,
+		AuthIDs: []string{"auth-1"},
+		Models:  []string{"model-1"},
+		Probe:   &probe,
 	})
 	r.nowFunc = func() time.Time { return now }
 	r.cookies = newCookieJar(time.Hour, r.now)
@@ -427,7 +443,7 @@ func TestStatusPageNeverRendersCookieValues(t *testing.T) {
 	header.Add("Set-Cookie", "__cflb=SECRETCOOKIEVALUE")
 	header.Add("Set-Cookie", "__oailb=OTHERSECRET")
 	r.observeCookies("auth-1", "harvest", "request", header)
-	r.cache.putIfTarget("auth-1", "model-1", "abc", "harvest")
+	r.cache.putState("auth-1", "model-1", "abc", "harvest")
 
 	withTestRuntime(t, r)
 	view := buildStatusView()

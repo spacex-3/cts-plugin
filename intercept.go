@@ -41,19 +41,27 @@ func applyAfterAuth(req pluginapi.RequestInterceptRequest) pluginapi.RequestInte
 		return pluginapi.RequestInterceptResponse{}
 	}
 	rt.ensureDemandProbe(makeCacheKey(authID, model), cfg)
+	// Cookies are account-level routing credentials: they pick the gateway and
+	// they do not depend on a cached ticket. So they are built first and injected
+	// whether or not a state is on hand. Before 0.6.3 a missing ticket short-
+	// circuited the whole interceptor, which sent the cookies we had captured
+	// nowhere at all.
+	injection := rt.cookieInjectionFor(req.Headers, authID, cfg)
 	entry, ok := rt.cache.lookup(authID, model)
 	if !ok || strings.TrimSpace(entry.State) == "" {
-		rt.recordBareRequest(authID, model)
-		rt.host.Log("debug", "codex-turn-state: request sent without a turn state", map[string]any{
-			"auth_id": authID,
-			"model":   model,
-		})
-		return pluginapi.RequestInterceptResponse{}
+		if !injection.injected() {
+			rt.recordBareRequest(authID, model)
+			rt.host.Log("debug", "codex-turn-state: request sent without state or cookies", map[string]any{
+				"auth_id": authID,
+				"model":   model,
+			})
+			return pluginapi.RequestInterceptResponse{}
+		}
+		rt.recordInjection(req, cacheEntry{AuthID: authID, Model: model, Source: cookieOnlySource}, injection)
+		headers := make(http.Header)
+		headers.Set("Cookie", injection.Header)
+		return pluginapi.RequestInterceptResponse{Headers: headers}
 	}
-	// The routing cookies travel with the ticket: without them a 292 state stops
-	// holding. They are account-level, so the newest live pair is reused for
-	// every model of that account.
-	injection := rt.cookieInjectionFor(req.Headers, authID, cfg)
 	rt.recordInjection(req, entry, injection)
 	headers := make(http.Header)
 	headers.Set(turnStateHeader, entry.State)
@@ -120,7 +128,6 @@ func harvestFromResponse(req pluginapi.ResponseInterceptRequest) {
 		}
 		return
 	}
-	rt.harvestHarvestedState(req.RequestID, authID, model, state)
 	rt.observeState(authID, model, state, "harvest")
 }
 
@@ -150,7 +157,6 @@ func harvestFromStream(req pluginapi.StreamChunkInterceptRequest) {
 		rt.harvestCompleted(req.RequestID, authID, model, state, req.Body, false)
 		return
 	}
-	rt.harvestHarvestedState(req.RequestID, authID, model, state)
 	rt.observeState(authID, model, state, "harvest")
 }
 
@@ -175,7 +181,6 @@ func harvestFromWebSocket(event pluginapi.WebSocketResponseEvent) {
 		rt.harvestCompleted(event.RequestID, authID, model, state, event.Payload, false)
 		return
 	}
-	rt.harvestHarvestedState(event.RequestID, authID, model, state)
 	rt.observeState(authID, model, state, "harvest")
 }
 
