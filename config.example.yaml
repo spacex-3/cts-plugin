@@ -57,7 +57,10 @@ plugins:
       # 否则注入的 Cookie 会被丢掉（状态页会黄条点名账号）。
       inject_cookies: true
       harvest_cookies: true
-      probe_send_cookies: true
+      # 探测默认走冷启动（不带 Cookie）。用别的出口采集到的 Cookie 去探测，等于
+      # 声明一个和当前连接不符的路由——这正是代理探测常年回 312 的常见来源。
+      # 冷启动探测照样会带回应有的票与 Cookie 对（harvest_cookies 开启时入库）。
+      probe_send_cookies: false
       # 上游给了更短的 Max-Age/Expires 就按上游的算，这个值是上限。
       cookie_ttl_seconds: 300
       # 被注入过 state 的请求收到上游拒绝的 state（例如又回 312）时，

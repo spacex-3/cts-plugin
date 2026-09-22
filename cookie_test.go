@@ -298,10 +298,11 @@ func (t *cookieProbeTransport) Do(_ context.Context, _ string, req *http.Request
 
 func TestProbeSendsLiveCookiesAndCapturesNewOnes(t *testing.T) {
 	now := time.Date(2026, time.September, 21, 9, 0, 0, 0, time.UTC)
-	probe := false
+	probe, send := false, true
 	r := isolatedRuntime(t, pluginConfig{
 		Models:            []string{"model-1"},
 		Probe:             &probe,
+		ProbeSendCookies:  &send,
 		TargetStateLength: 3,
 	})
 	r.nowFunc = func() time.Time { return now }
@@ -334,6 +335,48 @@ func TestProbeSendsLiveCookiesAndCapturesNewOnes(t *testing.T) {
 	}
 	if live[0].Source != "probe" || live[0].Route != "direct" {
 		t.Fatalf("probe cookie provenance = %+v", live[0])
+	}
+}
+
+// A probe is a cold request unless probe_send_cookies is turned on: it must not
+// recycle a routing cookie captured on some other exit, and it must still capture
+// the fresh pair the cold probe is handed.
+func TestProbesGoOutColdByDefault(t *testing.T) {
+	now := time.Date(2026, time.September, 21, 9, 0, 0, 0, time.UTC)
+	probe := false
+	r := isolatedRuntime(t, pluginConfig{
+		Models:            []string{"model-1"},
+		Probe:             &probe,
+		TargetStateLength: 3,
+	})
+	if r.configSnapshot().probeSendCookiesEnabled() {
+		t.Fatal("probe cookies should be off by default")
+	}
+	r.nowFunc = func() time.Time { return now }
+	r.cookies = newCookieJar(time.Hour, r.now)
+	header := http.Header{}
+	header.Add("Set-Cookie", "__cflb=cf")
+	header.Add("Set-Cookie", "__oailb=oa")
+	r.observeCookies("auth-1", "harvest", "request", header)
+
+	transport := &cookieProbeTransport{
+		state:    "abc",
+		response: http.Header{"Set-Cookie": []string{"__cflb=cf2; Path=/"}},
+	}
+	r.transport = transport
+	target := probeTarget{AuthID: "auth-1", Model: "model-1", Token: "token", BaseURL: "https://example.test/backend-api/codex"}
+	if state, errProbe := r.probeOnce(context.Background(), "", target, r.configSnapshot()); errProbe != nil || state != "abc" {
+		t.Fatalf("probe state = %q err = %v", state, errProbe)
+	}
+	if transport.cookieHeader != "" {
+		t.Fatalf("cold probe sent cookies: %q", transport.cookieHeader)
+	}
+	live := r.cookies.live("auth-1")
+	if len(live) != 2 || live[0].Value != "cf2" || live[0].Source != "probe" {
+		t.Fatalf("cold probe response cookies were not captured: %#v", live)
+	}
+	if r.probeSendsCookies(r.configSnapshot(), "auth-1") {
+		t.Fatal("probeSendsCookies should stay false without probe_send_cookies")
 	}
 }
 

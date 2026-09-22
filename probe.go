@@ -220,9 +220,10 @@ func (rt *pluginRuntime) probeDirectBaseline(ctx context.Context, target probeTa
 	if errProbe != nil {
 		rt.recordProbeAttempt(target, "direct", 0, "", false, false, errProbe.Error())
 		rt.host.Log("info", "codex-turn-state: direct baseline probe failed", map[string]any{
-			"auth_id": target.AuthID,
-			"model":   target.Model,
-			"error":   errProbe.Error(),
+			"auth_id":      target.AuthID,
+			"model":        target.Model,
+			"cookies_sent": rt.probeSendsCookies(cfg, target.AuthID),
+			"error":        errProbe.Error(),
 		})
 		return
 	}
@@ -253,11 +254,12 @@ func (rt *pluginRuntime) probeTargetOnce(ctx context.Context, target probeTarget
 			if errProbe != nil {
 				rt.recordProbeAttempt(target, "direct", attempt, "", false, false, errProbe.Error())
 				rt.host.Log("info", "codex-turn-state: direct probe attempt failed", map[string]any{
-					"auth_id": target.AuthID,
-					"model":   target.Model,
-					"route":   "direct",
-					"attempt": attempt,
-					"error":   sanitizeErrorText(errProbe.Error()),
+					"auth_id":      target.AuthID,
+					"model":        target.Model,
+					"route":        "direct",
+					"attempt":      attempt,
+					"cookies_sent": rt.probeSendsCookies(cfg, target.AuthID),
+					"error":        sanitizeErrorText(errProbe.Error()),
 				})
 				if rt.stopForQuota(target.AuthID, cfg, errProbe) {
 					return
@@ -332,10 +334,11 @@ func (rt *pluginRuntime) probeTargetWithProxies(ctx context.Context, proxies []s
 			rt.recordProbe(target, state, true, "")
 			rt.resetProbeMiss(makeCacheKey(target.AuthID, target.Model))
 			rt.host.Log("info", "codex-turn-state: captured target turn state", map[string]any{
-				"auth_id":     target.AuthID,
-				"model":       target.Model,
-				"length":      len(state),
-				"proxy_index": proxyIndex + 1,
+				"auth_id":      target.AuthID,
+				"model":        target.Model,
+				"length":       len(state),
+				"proxy_index":  proxyIndex + 1,
+				"cookies_sent": rt.probeSendsCookies(cfg, target.AuthID),
 			})
 			return
 		}
@@ -343,12 +346,13 @@ func (rt *pluginRuntime) probeTargetWithProxies(ctx context.Context, proxies []s
 		rt.recordProbeAttemptWithProxy(target, "proxy", proxyLabel, attempt, state, false, false, lastErr.Error())
 		rt.recordProbe(target, state, false, lastErr.Error())
 		rt.host.Log("info", "codex-turn-state: probe turn state rejected", map[string]any{
-			"auth_id":     target.AuthID,
-			"model":       target.Model,
-			"length":      len(strings.TrimSpace(state)),
-			"blocks":      stateBlocksText(state),
-			"attempt":     attempt,
-			"proxy_index": proxyIndex + 1,
+			"auth_id":      target.AuthID,
+			"model":        target.Model,
+			"length":       len(strings.TrimSpace(state)),
+			"blocks":       stateBlocksText(state),
+			"attempt":      attempt,
+			"proxy_index":  proxyIndex + 1,
+			"cookies_sent": rt.probeSendsCookies(cfg, target.AuthID),
 		})
 	}
 	if lastErr != nil {
@@ -380,13 +384,11 @@ func (rt *pluginRuntime) probeOnce(ctx context.Context, proxyURL string, target 
 	req.Header.Set("Originator", codexOriginator)
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("Connection", "Keep-Alive")
-	// The ticket only keeps working when the account's routing cookies ride
-	// along, so a probe asks for a new ticket the same way production traffic
-	// does.
-	if cfg.probeSendCookiesEnabled() && rt.cookies != nil {
-		if live := rt.cookies.live(target.AuthID); len(live) > 0 {
-			req.Header.Set("Cookie", mergeCookieHeader("", live))
-		}
+	// A probe is a cold request by default: it mints a fresh ticket (and a fresh
+	// cookie pair, captured below) instead of recycling the routing cookie of a
+	// previous probe from a different egress. See probeSendCookiesEnabled.
+	if rt.probeSendsCookies(cfg, target.AuthID) {
+		req.Header.Set("Cookie", mergeCookieHeader("", rt.cookies.live(target.AuthID)))
 	}
 
 	resp, errDo := rt.transport.Do(ctx, proxyURL, req)

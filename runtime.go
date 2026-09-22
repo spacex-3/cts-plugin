@@ -809,6 +809,16 @@ func serializedRequestHeaders(headers http.Header, state string, injectedCookies
 	return string(raw)
 }
 
+// probeSendsCookies reports whether a probe for this account currently carries
+// the account's routing cookies. The probe request and the attempt log both ask
+// this same question, so what the logs say is what actually left the plugin.
+func (r *pluginRuntime) probeSendsCookies(cfg pluginConfig, authID string) bool {
+	if r == nil || r.cookies == nil || !cfg.probeSendCookiesEnabled() {
+		return false
+	}
+	return len(r.cookies.live(authID)) > 0
+}
+
 func (r *pluginRuntime) recordProbeAttempt(target probeTarget, route string, attempt int, state string, targetMatch, cached bool, errText string) {
 	r.recordProbeAttemptWithProxy(target, route, "", attempt, state, targetMatch, cached, errText)
 }

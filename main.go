@@ -233,7 +233,7 @@ func pluginRegistration() registration {
 				{Name: "direct_probe", Type: pluginapi.ConfigFieldTypeBoolean, Description: "探测时先试不使用代理的直连；命中目标 state 时写入缓存并结束该轮。默认开启（直连正是实测能打出好票的出口）。配合空的代理池即为「只用直连探测」；想只用代理池则设为 false。"},
 				{Name: "inject_cookies", Type: pluginapi.ConfigFieldTypeBoolean, Description: "注入 state 的同时注入账号级路由 Cookie（__cflb / __oailb）。默认开启：现在的 292 必须带 Cookie 才能持续，只注入 state 大约几分钟后就会失效。"},
 				{Name: "harvest_cookies", Type: pluginapi.ConfigFieldTypeBoolean, Description: "从上游响应（真实流量与探测）采集 __cflb / __oailb。默认开启。只认这两个名字，其余 Cookie 一律不看也不存。"},
-				{Name: "probe_send_cookies", Type: pluginapi.ConfigFieldTypeBoolean, Description: "探测请求携带当前存活的路由 Cookie。默认开启：探测和真实流量用同一套凭据打票，拿到的 state 才和线上一致。"},
+				{Name: "probe_send_cookies", Type: pluginapi.ConfigFieldTypeBoolean, Description: "探测请求是否携带当前存活的路由 Cookie。默认关闭：探测要走冷启动，用新连接打出新票和新 Cookie；带着别的出口采集到的 Cookie 去探测等于声明一个和当前连接不符的路由，正是 312 的常见来源。探测响应里的新 Cookie 仍会被采集（harvest_cookies 开启时）。"},
 				{Name: "cookie_ttl_seconds", Type: pluginapi.ConfigFieldTypeInteger, Description: "路由 Cookie 的最长保存时间（秒）。默认 300。上游给了更短的 Max-Age/Expires 就按上游的算，这个值是上限。"},
 				{Name: "invalidate_on_reject", Type: pluginapi.ConfigFieldTypeBoolean, Description: "默认开启：当被注入过 state 的请求收到上游拒绝的 state（例如又回 312）时，立即作废该缓存并触发重探。这是上游免费给的失效信号，比固定 TTL 准得多；只有真实注入过的请求才会触发，裸发请求的 312 不会误伤缓存。"},
 				{Name: "state_refresh_seconds", Type: pluginapi.ConfigFieldTypeInteger, Description: "票龄超过这个秒数就算「可续期」，state_aware / on_demand 会提前重探。默认 0 表示用 probe_lead_seconds（默认提前 180 秒）。"},

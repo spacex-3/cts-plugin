@@ -58,7 +58,7 @@ plugins:
       direct_probe: true
       inject_cookies: true
       harvest_cookies: true
-      probe_send_cookies: true
+      probe_send_cookies: false
       cookie_ttl_seconds: 300
       invalidate_on_reject: true
       probe_schedule: state_aware
@@ -114,7 +114,7 @@ For SOCKS5-only providers such as BestGo, set `proxy_scheme: socks5` when the en
 - `ttl_seconds`: maximum cache age for injection. Default: `300` (five minutes). A measured 292 only survived about 200 seconds, so a shorter default is the safer one: injecting an expired ticket cannot make an answer better. The status page reports the measured combo lifetime so the value can be tuned from data.
 - `inject_cookies`: send the account-level routing cookies together with the state. Default: `true`. **The cookies only reach the upstream when the auth file declares `"headers": {"Cookie": "$Cookie"}`** — see the requirement section above.
 - `harvest_cookies`: collect `__cflb`/`__oailb` from upstream responses (production traffic and probes). Default: `true`. Only those two names are ever read, stored or displayed.
-- `probe_send_cookies`: make probes carry the current live routing cookies, so a probe asks for a ticket with the same credentials production traffic uses. Default: `true`.
+- `probe_send_cookies`: make probes carry the account's current live routing cookies. Default: `false` — a probe is a cold request. The jar is keyed by account while probes rotate egresses, so re-sending a cookie captured on one exit from another exit asks the upstream for a ticket for a route the connection is not on, which is a known 312 source. A cold probe cannot contradict itself and its response still hands back the fresh ticket plus its cookie pair; turn this on only to mirror production traffic on probes. The status page chip `探测凭据` shows which mode is active and every probe log line records `cookies_sent`.
 - `cookie_ttl_seconds`: hard cap on how long a routing cookie is kept. Default: `300`. A shorter upstream `Max-Age`/`Expires` wins.
 - `invalidate_on_reject`: default `true`. When a request that carried our injected state comes back with a state the plugin rejects (a 312, for example), the cached entry is dropped immediately and a reprobe is queued. Bare requests cannot trigger this, so their 312s never retire a good ticket.
 - `state_refresh_seconds`: age at which a cached ticket counts as renewable for `state_aware`/`on_demand`. Default: `0`, meaning `probe_lead_seconds` decides.
@@ -140,7 +140,7 @@ Measured on one account and egress: the ticket and the cookies are independent. 
 - Tickets and cookies do not need to be paired: swapping tickets inside one conversation works, and deliberate mismatches work too. The plugin therefore keeps one cookie pool per **account** and reuses the newest live pair for every model.
 - Cookies expire on their own, and they are the more likely half to die first. The plugin tracks ticket age and cookie age separately and reports the last invalidation reason per model.
 
-The defaults work together: `state_aware` renewal, `invalidate_on_reject`, and probes carrying the same cookies. The moment the upstream refuses the ticket we just injected, it is dropped and reprobed instead of being injected until the TTL runs out.
+The defaults work together: `state_aware` renewal, `invalidate_on_reject`, and cold probes that mint a fresh ticket and cookie pair instead of recycling the previous one. The moment the upstream refuses the ticket we just injected, it is dropped and reprobed instead of being injected until the TTL runs out.
 
 ### Requirement: the account must forward cookies
 

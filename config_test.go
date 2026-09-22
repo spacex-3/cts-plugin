@@ -46,8 +46,11 @@ func TestProbeLogDefaultsAndClamp(t *testing.T) {
 	if !cfg.directProbeEnabled() {
 		t.Fatal("direct probe should default to enabled")
 	}
-	if !cfg.injectCookiesEnabled() || !cfg.harvestCookiesEnabled() || !cfg.probeSendCookiesEnabled() {
+	if !cfg.injectCookiesEnabled() || !cfg.harvestCookiesEnabled() {
 		t.Fatal("routing cookies should be captured and injected by default")
+	}
+	if cfg.probeSendCookiesEnabled() {
+		t.Fatal("probes should go out cold by default")
 	}
 	if !cfg.invalidateOnRejectEnabled() {
 		t.Fatal("a refused ticket should invalidate the cache by default")

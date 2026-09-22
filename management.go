@@ -733,6 +733,7 @@ func renderStatusPage(view statusView, triggered bool) []byte {
 	out.WriteString(chipHTML("采集", boolLabel(view.Harvest)))
 	out.WriteString(chipHTML("探测", boolLabel(view.Probe)))
 	out.WriteString(chipHTML("直连基线", boolLabel(view.DirectProbe)))
+	out.WriteString(chipHTML("探测凭据", probeCredentialLabel(view)))
 	out.WriteString(chipHTML("注入 Cookie", boolLabel(view.InjectCookies)))
 	out.WriteString(chipHTML("Cookie TTL", formatDuration(time.Duration(view.CookieTTLSeconds)*time.Second)))
 	out.WriteString(chipHTML("失效即失效", boolLabel(view.InvalidateOnReject)))
@@ -1014,6 +1015,16 @@ func writeModelBlock(out *bytes.Buffer, model statusAccountModel, showState bool
 		out.WriteString("</code></details>")
 	}
 	out.WriteString("</div>")
+}
+
+// probeCredentialLabel spells out whether probes ask for a ticket on a cold
+// connection or re-send the account's routing cookies. It is the first thing to
+// check when every proxied probe answers 312.
+func probeCredentialLabel(view statusView) string {
+	if view.ProbeSendCookies {
+		return "携带 Cookie（热启动）"
+	}
+	return "冷启动（不带 Cookie）"
 }
 
 // writeCookieBanner says out loud when the plugin is expected to send routing

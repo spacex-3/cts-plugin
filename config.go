@@ -39,7 +39,7 @@ const (
 )
 
 var (
-	pluginVersion      = "0.6.1"
+	pluginVersion      = "0.6.2"
 	defaultProbeModels = []string{"gpt-5.6-sol", "gpt-6-astra"}
 
 	// Fernet envelope block counts accepted as a full-strength turn state:
@@ -123,8 +123,16 @@ func (c pluginConfig) harvestCookiesEnabled() bool {
 	return c.HarvestCookies == nil || *c.HarvestCookies
 }
 
+// Probes go out cold by default: no cookie rides along. A probe is how a fresh
+// ticket *and* its cookie pair are minted, and the jar is keyed by account while
+// the probe rotates egresses — sending a cookie captured on one exit from another
+// exit asks the upstream for a ticket for a route the connection is not on, which
+// is exactly the case that answers 312. A cold probe cannot contradict itself,
+// and its response hands back the fresh pair anyway (captured whenever
+// harvest_cookies is on). Set probe_send_cookies: true only to reproduce
+// production traffic on probes.
 func (c pluginConfig) probeSendCookiesEnabled() bool {
-	return c.ProbeSendCookies == nil || *c.ProbeSendCookies
+	return c.ProbeSendCookies != nil && *c.ProbeSendCookies
 }
 
 func (c pluginConfig) invalidateOnRejectEnabled() bool {

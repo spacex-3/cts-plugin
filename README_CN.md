@@ -58,7 +58,7 @@ plugins:
       direct_probe: true
       inject_cookies: true
       harvest_cookies: true
-      probe_send_cookies: true
+      probe_send_cookies: false
       cookie_ttl_seconds: 300
       invalidate_on_reject: true
       probe_schedule: state_aware
@@ -118,7 +118,7 @@ BestGo 这类 SOCKS5 节点，条目不带协议前缀时记得把 `proxy_scheme
 - `direct_probe`：每个账号+模型在代理尝试前先执行不使用代理的直连请求；命中目标形态时会写入缓存并结束该轮。默认 `true`（直连正是实测能打出合格票的出口）；只用代理池时设为 `false`。配合空代理池即为「只用直连探测」——0.5.2 之前代理池为空会整轮跳过。
 - `inject_cookies`：注入 state 的同时注入账号级路由 Cookie。默认 `true`。**注意：还需要账号 JSON 里配置 `"headers": {"Cookie": "$Cookie"}` 才能真正到达上游**，见上一节。
 - `harvest_cookies`：从上游响应（真实流量与探测）采集 `__cflb` / `__oailb`。默认 `true`。只认这两个名字，其余 Cookie 一律不看、不存、不显示。
-- `probe_send_cookies`：探测请求携带当前存活的路由 Cookie，让探测和线上流量用同一套凭据打票。默认 `true`。
+- `probe_send_cookies`：探测请求是否携带当前存活的路由 Cookie。默认 `false`——探测走**冷启动**。原因：Cookie 池是按**账号**存的，而探测会轮换出口，拿着 A 出口采集到的 Cookie 从 B 出口去探测，等于给上游一个和当前连接不符的路由声明（正是代理探测常年回 312 的常见来源）；冷启动探测不存在这个矛盾，而且它打出的新票与新 Cookie 对会被一起采回池子（`harvest_cookies` 开启时）。只有在需要“让探测完全模拟线上流量”时才设为 `true`。状态页的 `探测凭据` chip 显示当前模式，每条探测日志都带 `cookies_sent`。
 - `cookie_ttl_seconds`：路由 Cookie 的最长保存时间。默认 `300`。上游给了更短的 `Max-Age` / `Expires` 就按上游的算，这个值是上限。
 - `invalidate_on_reject`：默认 `true`。当**被注入过 state 的请求**收到上游拒绝的 state（例如又回 312）时，立即作废该缓存并触发重探。裸发请求返回的 312 不会误伤缓存。
 - `state_refresh_seconds`：票龄超过这个秒数就算“可续期”，`state_aware` / `on_demand` 会提前重探。默认 `0`，表示用 `probe_lead_seconds`。
@@ -140,11 +140,11 @@ BestGo 这类 SOCKS5 节点，条目不带协议前缀时记得把 `proxy_scheme
 - 票与 Cookie **不需要配对**：同一个对话里换票可用，故意错配也可用。所以插件按**账号**维护一个 Cookie 池，所有模型共用最新的那一份。
 - Cookie 自己也会过期，而且很可能比票先死。插件因此分开记录票龄与 Cookie 龄，并在状态页给出“最近一次失效原因”。
 
-默认行为组合：`state_aware` 定时续期 + `invalidate_on_reject` 即时作废 + 探测携带同一套 Cookie。三者配合下，一旦上游拒绝刚注入的票，插件立刻丢弃它并重探，而不是继续拿坏票发请求到达 TTL。
+默认行为组合：`state_aware` 定时续期 + `invalidate_on_reject` 即时作废 + 冷启动探测（每次打出的是新票与新 Cookie 对，而不是回收上一张）。三者配合下，一旦上游拒绝刚注入的票，插件立刻丢弃它并重探，而不是继续拿坏票发请求到达 TTL。
 
 ### 前提：必须让账号允许转发 Cookie（否则注入无效）
 
-CPA 的 Codex 执行器**不会**把客户端请求头整体转发给上游，它只复制一份固定白名单（`x-codex-turn-state`、`x-codex-turn-metadata`、`session_id`、`User-Agent`、`Originator` 等），**`Cookie` 不在其中**。所以插件把 Cookie 写进请求头之后，CPA 在发往上游前会把它丢掉——状态页上会显示“`已注入` 在涨、`带Cookie注入` 是 0”，探测也因此白打。
+CPA 的 Codex 执行器**不会**把客户端请求头整体转发给上游，它只复制一份固定白名单（`x-codex-turn-state`、`x-codex-turn-metadata`、`session_id`、`User-Agent`、`Originator` 等），**`Cookie` 不在其中**。所以插件把 Cookie 写进请求头之后，CPA 在发往上游前会把它丢掉——状态页上会显示“`已注入` 在涨、`带Cookie注入` 是 0”，打回来的票也留不住。
 
 要打通这一步，在每个 Codex 账号的 JSON 里加一行自定义请求头：
 
