@@ -239,11 +239,12 @@ func TestPrepareProbeAllowsDirectOnlyWithoutProxies(t *testing.T) {
 }
 
 func TestPrepareProbeExplainsEmptyProxyPool(t *testing.T) {
-	probe := true
+	probe, direct := true, false
 	testRuntime := probeConfigRuntime(t, pluginConfig{
-		Models:  []string{"model-1"},
-		Probe:   &probe,
-		Proxies: []string{},
+		Models:      []string{"model-1"},
+		Probe:       &probe,
+		DirectProbe: &direct,
+		Proxies:     []string{},
 	})
 	if _, _, ok := testRuntime.prepareProbe(testRuntime.configSnapshot()); ok {
 		t.Fatal("probing without proxies and without direct_probe should be skipped")
@@ -273,11 +274,12 @@ func TestPrepareProbeKeepsUsableProxiesWhenOneEntryIsBad(t *testing.T) {
 }
 
 func TestPrepareProbeRejectsUnparsableProxyPool(t *testing.T) {
-	probe := true
+	probe, direct := true, false
 	testRuntime := probeConfigRuntime(t, pluginConfig{
-		Models:  []string{"model-1"},
-		Probe:   &probe,
-		Proxies: []string{"this-is-not-a-proxy"},
+		Models:      []string{"model-1"},
+		Probe:       &probe,
+		DirectProbe: &direct,
+		Proxies:     []string{"this-is-not-a-proxy"},
 	})
 	if _, _, ok := testRuntime.prepareProbe(testRuntime.configSnapshot()); ok {
 		t.Fatal("a proxy pool with no usable entry should skip probing")

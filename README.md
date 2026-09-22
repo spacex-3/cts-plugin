@@ -24,9 +24,11 @@ Then add the plugin configuration shown in [`config.example.yaml`](config.exampl
 - Stops reading and closes the connection immediately after finding turn-state metadata.
 - Accepts only states whose Fernet block count is allowed (`accepted_blocks`, default `[10, 12]` ≈ 292/332); non-Fernet states fall back to `target_state_length` (default: `292`).
 - Harvests matching state from regular HTTP, SSE, and WebSocket Codex responses.
+- Captures the account-level routing cookies (`__cflb`, `__oailb`) that now travel with a ticket, and sends them alongside the state.
 - Caches state in memory by exact runtime auth ID plus resolved model.
-- Replaces `X-Codex-Turn-State` on later matching requests while the state is within `ttl_seconds` (default: one hour).
-- Never shares state across accounts or models.
+- Replaces `X-Codex-Turn-State` on later matching requests while the state is within `ttl_seconds` (default: five minutes — a measured 292 only lasted about 200 seconds).
+- Drops a cached ticket the moment the upstream refuses it (a 312 response to a request that carried our state) instead of waiting for the TTL.
+- Never shares state across accounts or models. Routing cookies are account-level, so every model of one account reuses the same live pair, exactly as the upstream issues them.
 
 The state cache is process-local. Restarting CPA or reloading the plugin clears it.
 
@@ -47,13 +49,20 @@ plugins:
       models:
         - "gpt-5.6-sol"
         - "gpt-6-astra"
-      interval_seconds: 300
+      interval_seconds: 120
       target_state_length: 292
-      ttl_seconds: 3600
+      ttl_seconds: 300
       inject: true
       harvest: true
       probe: true
       direct_probe: true
+      inject_cookies: true
+      harvest_cookies: true
+      probe_send_cookies: true
+      cookie_ttl_seconds: 300
+      invalidate_on_reject: true
+      probe_schedule: state_aware
+      probe_lead_seconds: 180
       show_state_values: false
       show_account_details: false
       show_injection_headers: false
@@ -97,16 +106,22 @@ For SOCKS5-only providers such as BestGo, set `proxy_scheme: socks5` when the en
 - `auth_ids`: exact Codex runtime auth IDs. Empty permits every Codex auth visible to the host.
 - `probe_auth_ids`: auth IDs that may be probed. Empty probes every auth in the `auth_ids` scope; the status page also supports per-account selection.
 - `models`: exact upstream model IDs. Defaults to `gpt-5.6-sol` and `gpt-6-astra`.
-- `interval_seconds`: delay after one full probe cycle finishes. Default: `1800`.
-- `probe_schedule`: `fixed` probes on a constant interval; `state_aware` skips periodic probes while a fresh state is cached and only resumes shortly before expiry. Default: `fixed`.
-- `probe_lead_seconds`: lead time before state expiry used by `state_aware`. Default: `300`.
+- `interval_seconds`: delay after one full probe cycle finishes. Default: `120`. A ticket only lives minutes now, so a 30-minute interval leaves long stretches of requests going out bare.
+- `probe_schedule`: `fixed` probes on a constant interval; `state_aware` skips periodic probes while a fresh state is cached and only resumes shortly before expiry; `on_demand` probes only when a request needs it. Default: `state_aware`.
+- `probe_lead_seconds`: lead time before state expiry used by `state_aware`/`on_demand`. Default: `180`. Set it to `0` to drive the same threshold from `state_refresh_seconds` instead.
 - `target_state_length`: required state length. Default: `292`.
 - `accepted_blocks`: the admission filter for tickets. Only states whose Fernet block count appears here are cached and injected. Default: `[10, 12]` — `10` ≈ 292 characters (Pro/Plus), `12` ≈ 332 (Team/business). `11` ≈ 312 is the shape proxied or throttled exits commonly return, so it is rejected by default: it can never displace the known-good 292 ticket you already hold. Add `11` only once 312 is confirmed as a legitimate shape for your models. Valid Fernet states use block count first; non-Fernet states fall back to `target_state_length`. Rejections are reported with the received length and block count so the choice is visible.
-- `ttl_seconds`: maximum cache age for injection. Default: `3600`.
+- `ttl_seconds`: maximum cache age for injection. Default: `300` (five minutes). A measured 292 only survived about 200 seconds, so a shorter default is the safer one: injecting an expired ticket cannot make an answer better. The status page reports the measured combo lifetime so the value can be tuned from data.
+- `inject_cookies`: send the account-level routing cookies together with the state. Default: `true`.
+- `harvest_cookies`: collect `__cflb`/`__oailb` from upstream responses (production traffic and probes). Default: `true`. Only those two names are ever read, stored or displayed.
+- `probe_send_cookies`: make probes carry the current live routing cookies, so a probe asks for a ticket with the same credentials production traffic uses. Default: `true`.
+- `cookie_ttl_seconds`: hard cap on how long a routing cookie is kept. Default: `300`. A shorter upstream `Max-Age`/`Expires` wins.
+- `invalidate_on_reject`: default `true`. When a request that carried our injected state comes back with a state the plugin rejects (a 312, for example), the cached entry is dropped immediately and a reprobe is queued. Bare requests cannot trigger this, so their 312s never retire a good ticket.
+- `state_refresh_seconds`: age at which a cached ticket counts as renewable for `state_aware`/`on_demand`. Default: `0`, meaning `probe_lead_seconds` decides.
 - `inject`: inject fresh cached state into matching requests. Default: `true`.
 - `harvest`: collect matching state from normal Codex traffic. Default: `true`.
 - `probe`: run background probes. Default: `true`.
-- `direct_probe`: send a no-proxy request before the proxy attempts for each auth/model; an accepted result is cached and ends the round. Default: `false`. Combined with an empty proxy pool this becomes direct-only probing — before 0.5.2 an empty pool skipped probing entirely.
+- `direct_probe`: send a no-proxy request before the proxy attempts for each auth/model; an accepted result is cached and ends the round. Default: `true`, because the direct egress is what produced accepted tickets in practice. Set it to `false` to keep probes on the proxy pool only. Combined with an empty proxy pool this becomes direct-only probing.
 - `show_state_values`: display and retain future full state values in the status page/JSON probe log. Default: `false`; enable only on a protected management endpoint.
 - `probe_log_limit`: maximum in-memory attempt records. Default: `200`, maximum: `1000`.
 - `max_probe_attempts`: attempts per auth/model in one cycle. Default: `3`.
@@ -115,7 +130,17 @@ For SOCKS5-only providers such as BestGo, set `proxy_scheme: socks5` when the en
 - `max_output_tokens`: deprecated compatibility field. It is ignored because Codex upstream rejects token-limit parameters.
 - `prompt`: minimal probe input. Default: `.`.
 
-When `probe` is enabled, `proxy` must contain at least one endpoint. A wrong-length state consumes an attempt and is not cached.
+When `probe` is enabled, there must be at least one usable egress: a proxy entry, or direct probing (on by default since 0.6). A wrong-length state consumes an attempt and is not cached.
+
+### Tickets and cookies (0.6 and later)
+
+Measured on one account and egress: the ticket and the cookies are independent. The ticket carries the qualification, the cookies carry the routing.
+
+- A ticket-plus-cookie pair stayed good for about **200 seconds** (nine consecutive good answers up to 191.7s; the upstream started answering 312 at ~267s). It is not an hour.
+- Tickets and cookies do not need to be paired: swapping tickets inside one conversation works, and deliberate mismatches work too. The plugin therefore keeps one cookie pool per **account** and reuses the newest live pair for every model.
+- Cookies expire on their own, and they are the more likely half to die first. The plugin tracks ticket age and cookie age separately and reports the last invalidation reason per model.
+
+The defaults work together: `state_aware` renewal, `invalidate_on_reject`, and probes carrying the same cookies. The moment the upstream refuses the ticket we just injected, it is dropped and reprobed instead of being injected until the TTL runs out.
 
 ## Matching behavior
 
@@ -164,7 +189,7 @@ are pseudonyms, not a cryptographic anonymity guarantee. Runtime persistence sti
 contains usable state with the existing owner-only file permissions. This change
 does not encrypt local storage.
 
-The page shows account cards at the top with a stable per-account color, current state length, live countdown, and requests/successes/total tokens/average TTFT for the current state window, followed by recent probe results and every proxy attempt. Each card also counts four things the state value cannot show: `已注入` (requests that carried a cached ticket), `裸发` (requests that passed every gate but left with no state), `回票相同` (harvested responses that handed back the exact ticket already held) and `换票` (responses that carried a different one). A non-zero `裸发` means injection is silently failing; mostly `回票相同` means the upstream returns the ticket it was given, mostly `换票` means it reissues one per turn. Proxy credentials and access tokens are never displayed. Full state values are displayed only when `show_state_values: true`; existing records captured while it was disabled remain hidden.
+The page shows account cards at the top with a stable per-account color, current state length, live countdown, and requests/successes/total tokens/average TTFT for the current state window, followed by recent probe results and every proxy attempt. Each card also counts five things the state value cannot show: `已注入` (requests that carried a cached ticket), `带Cookie注入` (those that also carried the routing cookies), `裸发` (requests that passed every gate but left with no state), `回票相同` (harvested responses that handed back the exact ticket already held) and `换票` (responses that carried a different one). A non-zero `裸发` means injection is silently failing; `带Cookie注入` well below `已注入` means no cookies have been captured; mostly `回票相同` means the upstream returns the ticket it was given, mostly `换票` means it reissues one per turn. Under the account label the page lists the live cookie names, their age and provenance (never their values), and each model card reports the measured combo lifetime plus the last invalidation reason (upstream refusal, TTL, or a suspected cookie expiry). Proxy credentials and access tokens are never displayed. Full state values are displayed only when `show_state_values: true`; existing records captured while it was disabled remain hidden.
 
 ## Troubleshooting "Operation failed; inspect local plugin logs for details"
 
@@ -172,7 +197,7 @@ That text is the redacted fallback used only when the plugin cannot safely echo 
 
 | Page message | Meaning |
 | --- | --- |
-| `未配置代理，且 direct_probe 未开启` | Probing needs an egress. Add a proxy, or enable `direct_probe` for direct-only probing. |
+| `未配置代理，且 direct_probe 未开启` | Probing needs an egress. Add a proxy, or enable `direct_probe` (on by default since 0.6) for direct-only probing. |
 | `代理配置里没有一条能解析` | Fill one `host:port:user:password` per line (credentials optional) or paste a JSON array. Unparsable lines are skipped and logged with their line number. |
 | `上游返回的 state 未被接受（长度 312 / 块 11）` | That egress returned a shape outside the admission filter (292/332 by default). This is expected: the plugin keeps injecting the previous accepted ticket and the probe moves to the next egress. Add `11` to `accepted_blocks` only if 312 is confirmed usable. |
 | `探测出口连接失败` | The proxy is unreachable, throttled, or the scheme is wrong (SOCKS5-only providers such as BestGo need `proxy_scheme: socks5`). See logs for the egress and cause. |
@@ -221,7 +246,7 @@ rotate_proxy_start: true
 
 `on_demand` has no startup probe or periodic timer. An eligible business request
 probes only its selected account/model when state is missing or within
-`probe_lead_seconds` (default 300) of expiry. Concurrent requests share one queued
+`probe_lead_seconds` (default 180) of expiry. Concurrent requests share one queued
 probe. Manual probes and failure-triggered probes remain available. The request
 wait is bounded (default 1500 ms; negative means enqueue without waiting); the
 worker may continue for `probe_timeout_seconds` after the request resumes. A

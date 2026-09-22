@@ -50,9 +50,16 @@ func applyAfterAuth(req pluginapi.RequestInterceptRequest) pluginapi.RequestInte
 		})
 		return pluginapi.RequestInterceptResponse{}
 	}
-	rt.recordInjection(req, entry)
+	// The routing cookies travel with the ticket: without them a 292 state stops
+	// holding. They are account-level, so the newest live pair is reused for
+	// every model of that account.
+	injection := rt.cookieInjectionFor(req.Headers, authID, cfg)
+	rt.recordInjection(req, entry, injection)
 	headers := make(http.Header)
 	headers.Set(turnStateHeader, entry.State)
+	if injection.injected() {
+		headers.Set("Cookie", injection.Header)
+	}
 	return pluginapi.RequestInterceptResponse{Headers: headers}
 }
 
@@ -102,6 +109,7 @@ func harvestFromResponse(req pluginapi.ResponseInterceptRequest) {
 	if !cfg.allows(authID, model) {
 		return
 	}
+	rt.observeCookies(authID, "harvest", "request", req.ResponseHeaders)
 	state := headerTurnState(req.ResponseHeaders)
 	if state == "" {
 		state = extractTurnStateFromChunk(req.Body)
@@ -112,6 +120,7 @@ func harvestFromResponse(req pluginapi.ResponseInterceptRequest) {
 		}
 		return
 	}
+	rt.harvestHarvestedState(req.RequestID, authID, model, state)
 	rt.observeState(authID, model, state, "harvest")
 }
 
@@ -128,6 +137,11 @@ func harvestFromStream(req pluginapi.StreamChunkInterceptRequest) {
 	if !cfg.allows(authID, model) {
 		return
 	}
+	// Only the header-init frame carries the upstream response headers, including
+	// the Set-Cookie lines that come back with a fresh ticket.
+	if req.ChunkIndex == pluginapi.StreamChunkHeaderInitIndex {
+		rt.observeCookies(authID, "harvest", "request", req.ResponseHeaders)
+	}
 	state := extractTurnStateFromChunk(req.Body)
 	if state == "" {
 		state = headerTurnState(req.ResponseHeaders)
@@ -136,6 +150,7 @@ func harvestFromStream(req pluginapi.StreamChunkInterceptRequest) {
 		rt.harvestCompleted(req.RequestID, authID, model, state, req.Body, false)
 		return
 	}
+	rt.harvestHarvestedState(req.RequestID, authID, model, state)
 	rt.observeState(authID, model, state, "harvest")
 }
 
@@ -152,11 +167,15 @@ func harvestFromWebSocket(event pluginapi.WebSocketResponseEvent) {
 	if !cfg.allows(authID, model) {
 		return
 	}
+	// WebSocket response events carry payloads only: an upstream Set-Cookie on
+	// the handshake is not visible here, so cookies are harvested on the HTTP
+	// paths and reused for WebSocket requests.
 	state := extractTurnStateFromChunk(event.Payload)
 	if cfg.RequireCompleted {
 		rt.harvestCompleted(event.RequestID, authID, model, state, event.Payload, false)
 		return
 	}
+	rt.harvestHarvestedState(event.RequestID, authID, model, state)
 	rt.observeState(authID, model, state, "harvest")
 }
 

@@ -123,7 +123,7 @@ func TestRestorePreservesAgeForProbeAndManual(t *testing.T) {
 	now := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
 	for _, source := range []string{"probe", "manual"} {
 		for _, issuedMode := range []bool{false, true} {
-			r := isolatedRuntime(t, pluginConfig{UseIssuedAt: issuedMode})
+			r := isolatedRuntime(t, pluginConfig{UseIssuedAt: issuedMode, TTLSeconds: 3600})
 			r.nowFunc = func() time.Time { return now }
 			original := cacheEntry{AuthID: "a", Model: "m", State: syntheticState(now.Add(-55 * time.Minute)), StoredAt: now.Add(-50 * time.Minute), Source: source}
 			r.cache.restore(original)
@@ -426,10 +426,24 @@ func (c *countFailureTransport) Do(context.Context, string, *http.Request) (*htt
 	return &http.Response{StatusCode: 429, Body: io.NopCloser(strings.NewReader(`{"error":{"code":"usage_limit_reached"}}`))}, nil
 }
 
-func TestLifecycleOptionsDefaultToLegacyBehavior(t *testing.T) {
+func TestLifecycleOptionsUseCurrentDefaults(t *testing.T) {
 	cfg := normalizeConfig(pluginConfig{})
-	if cfg.probeSchedule() != "fixed" || cfg.UseIssuedAt || cfg.RequireCompleted || cfg.ErrorAwareBackoff || cfg.RotateProxyStart {
-		t.Fatalf("legacy defaults changed: %+v", cfg)
+	// A ticket now lives minutes rather than an hour, so the defaults renew it
+	// ahead of expiry instead of waiting out a long fixed interval.
+	if cfg.probeSchedule() != "state_aware" {
+		t.Fatalf("probe schedule = %q, want state_aware", cfg.probeSchedule())
+	}
+	if cfg.ttl() != 300*time.Second {
+		t.Fatalf("ttl = %v, want 5m", cfg.ttl())
+	}
+	if cfg.interval() != 120*time.Second {
+		t.Fatalf("interval = %v, want 2m", cfg.interval())
+	}
+	if cfg.probeLead() != 180*time.Second {
+		t.Fatalf("probe lead = %v, want 3m", cfg.probeLead())
+	}
+	if cfg.UseIssuedAt || cfg.RequireCompleted || cfg.ErrorAwareBackoff || cfg.RotateProxyStart {
+		t.Fatalf("unexpected default overrides: %+v", cfg)
 	}
 	if cfg.probeWait() != 1500*time.Millisecond || cfg.probeTimeout() != time.Minute {
 		t.Fatal("unexpected demand defaults")

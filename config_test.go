@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestPluginConfigAllowsConfiguredTargets(t *testing.T) {
 	cfg := normalizeConfig(pluginConfig{
@@ -40,8 +43,20 @@ func TestPluginConfigDefaults(t *testing.T) {
 
 func TestProbeLogDefaultsAndClamp(t *testing.T) {
 	cfg := normalizeConfig(pluginConfig{})
-	if cfg.directProbeEnabled() {
-		t.Fatal("direct probe should default to disabled")
+	if !cfg.directProbeEnabled() {
+		t.Fatal("direct probe should default to enabled")
+	}
+	if !cfg.injectCookiesEnabled() || !cfg.harvestCookiesEnabled() || !cfg.probeSendCookiesEnabled() {
+		t.Fatal("routing cookies should be captured and injected by default")
+	}
+	if !cfg.invalidateOnRejectEnabled() {
+		t.Fatal("a refused ticket should invalidate the cache by default")
+	}
+	if cfg.probeSchedule() != defaultProbeSchedule {
+		t.Fatalf("probe schedule = %q, want %q", cfg.probeSchedule(), defaultProbeSchedule)
+	}
+	if cfg.cookieTTL() != time.Duration(defaultCookieTTLSeconds)*time.Second {
+		t.Fatalf("cookie ttl = %v, want %ds", cfg.cookieTTL(), defaultCookieTTLSeconds)
 	}
 	if cfg.showStateValuesEnabled() {
 		t.Fatal("state values should default to hidden")

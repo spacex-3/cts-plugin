@@ -11,9 +11,11 @@ const (
 	resourcePath        = "/status"
 	resourceContentType = "text/html; charset=utf-8"
 
-	defaultIntervalSeconds         = 1800
+	defaultIntervalSeconds         = 120
 	defaultTargetStateLength       = 292
-	defaultTTLSeconds              = 3600
+	defaultTTLSeconds              = 300
+	defaultProbeLeadSeconds        = 180
+	defaultCookieTTLSeconds        = 300
 	defaultMaxProbeAttempts        = 3
 	defaultAttemptsPerRoute        = 1
 	maxAttemptsPerRoute            = 10
@@ -22,6 +24,12 @@ const (
 	maxProbeLogLimit               = 1000
 	defaultFailureReprobeThreshold = 3
 	defaultProbePrompt             = "."
+	defaultProbeSchedule           = "state_aware"
+
+	// injectedRequestTTL bounds how long a production request is remembered so a
+	// rejected upstream response can be tied back to the ticket we sent on it.
+	injectedRequestTTL   = 20 * time.Minute
+	injectedRequestLimit = 4096
 
 	codexUserAgent  = "codex-tui/0.154.0 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.154.0)"
 	codexOriginator = "codex-tui"
@@ -31,7 +39,7 @@ const (
 )
 
 var (
-	pluginVersion      = "0.5.4"
+	pluginVersion      = "0.6.0"
 	defaultProbeModels = []string{"gpt-5.6-sol", "gpt-6-astra"}
 
 	// Fernet envelope block counts accepted as a full-strength turn state:
@@ -58,6 +66,12 @@ type pluginConfig struct {
 	Harvest                 *bool    `yaml:"harvest"`
 	Probe                   *bool    `yaml:"probe"`
 	DirectProbe             *bool    `yaml:"direct_probe"`
+	InjectCookies           *bool    `yaml:"inject_cookies"`
+	HarvestCookies          *bool    `yaml:"harvest_cookies"`
+	ProbeSendCookies        *bool    `yaml:"probe_send_cookies"`
+	CookieTTLSeconds        int      `yaml:"cookie_ttl_seconds"`
+	InvalidateOnReject      *bool    `yaml:"invalidate_on_reject"`
+	StateRefreshSeconds     int      `yaml:"state_refresh_seconds"`
 	ShowAccountDetails      bool     `yaml:"show_account_details"`
 	ShowInjectionHeaders    bool     `yaml:"show_injection_headers"`
 	ShowStateValues         *bool    `yaml:"show_state_values"`
@@ -91,8 +105,37 @@ func (c pluginConfig) probeEnabled() bool {
 	return c.Probe == nil || *c.Probe
 }
 
+// Direct probing is on by default: the direct egress is what production traffic
+// uses when no host proxy is configured, and it is the egress that produced the
+// accepted tickets in practice. Set direct_probe: false to keep probes on the
+// proxy pool only.
 func (c pluginConfig) directProbeEnabled() bool {
-	return c.DirectProbe != nil && *c.DirectProbe
+	return c.DirectProbe == nil || *c.DirectProbe
+}
+
+// Cookies carry the account-level routing credential the Codex backend hands out
+// together with a turn state, so they are captured and injected by default.
+func (c pluginConfig) injectCookiesEnabled() bool {
+	return c.InjectCookies == nil || *c.InjectCookies
+}
+
+func (c pluginConfig) harvestCookiesEnabled() bool {
+	return c.HarvestCookies == nil || *c.HarvestCookies
+}
+
+func (c pluginConfig) probeSendCookiesEnabled() bool {
+	return c.ProbeSendCookies == nil || *c.ProbeSendCookies
+}
+
+func (c pluginConfig) invalidateOnRejectEnabled() bool {
+	return c.InvalidateOnReject == nil || *c.InvalidateOnReject
+}
+
+func (c pluginConfig) cookieTTL() time.Duration {
+	if c.CookieTTLSeconds <= 0 {
+		return time.Duration(defaultCookieTTLSeconds) * time.Second
+	}
+	return time.Duration(c.CookieTTLSeconds) * time.Second
 }
 
 func (c pluginConfig) showStateValuesEnabled() bool {
@@ -255,19 +298,31 @@ func (c pluginConfig) probePrompt() string {
 
 func (c pluginConfig) probeSchedule() string {
 	switch strings.ToLower(strings.TrimSpace(c.ProbeSchedule)) {
-	case "state_aware":
-		return "state_aware"
+	case "fixed":
+		return "fixed"
 	case "on_demand":
 		return "on_demand"
+	case "":
+		return defaultProbeSchedule
 	}
-	return "fixed"
+	return "state_aware"
 }
 
+// probeLead is how long before expiry a cached ticket starts counting as
+// renewable. state_refresh_seconds takes precedence when set, so the refresh
+// point can be expressed as "renew a ticket older than N seconds".
 func (c pluginConfig) probeLead() time.Duration {
-	if c.ProbeLeadSeconds <= 0 {
-		return 5 * time.Minute
+	if c.ProbeLeadSeconds > 0 {
+		return time.Duration(c.ProbeLeadSeconds) * time.Second
 	}
-	return time.Duration(c.ProbeLeadSeconds) * time.Second
+	if c.StateRefreshSeconds > 0 {
+		lead := c.ttl() - time.Duration(c.StateRefreshSeconds)*time.Second
+		if lead < 0 {
+			return 0
+		}
+		return lead
+	}
+	return time.Duration(defaultProbeLeadSeconds) * time.Second
 }
 
 func (c pluginConfig) models() []string {
@@ -373,6 +428,12 @@ func normalizeConfig(cfg pluginConfig) pluginConfig {
 	}
 	if cfg.ProbeLeadSeconds < 0 {
 		cfg.ProbeLeadSeconds = 0
+	}
+	if cfg.CookieTTLSeconds < 0 {
+		cfg.CookieTTLSeconds = 0
+	}
+	if cfg.StateRefreshSeconds < 0 {
+		cfg.StateRefreshSeconds = 0
 	}
 	if cfg.FailureReprobeThreshold < 0 {
 		cfg.FailureReprobeThreshold = -1

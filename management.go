@@ -67,9 +67,16 @@ type statusView struct {
 	Harvest                 bool              `json:"harvest"`
 	Probe                   bool              `json:"probe"`
 	DirectProbe             bool              `json:"direct_probe"`
+	InjectCookies           bool              `json:"inject_cookies"`
+	HarvestCookies          bool              `json:"harvest_cookies"`
+	ProbeSendCookies        bool              `json:"probe_send_cookies"`
+	CookieTTLSeconds        int               `json:"cookie_ttl_seconds"`
+	InvalidateOnReject      bool              `json:"invalidate_on_reject"`
+	StateRefreshSeconds     int               `json:"state_refresh_seconds,omitempty"`
 	ShowStateValues         bool              `json:"show_state_values"`
 	ProbeLogLimit           int               `json:"probe_log_limit"`
 	GlobalError             string            `json:"global_error,omitempty"`
+	Cookies                 []statusCookie    `json:"cookies"`
 	Accounts                []statusAccount   `json:"accounts"`
 	States                  []statusState     `json:"states"`
 	Probes                  []statusProbe     `json:"probes"`
@@ -115,27 +122,29 @@ type statusProbeLog struct {
 }
 
 type statusInjection struct {
-	Time            string  `json:"time"`
-	RequestID       string  `json:"request_id,omitempty"`
-	AuthID          string  `json:"auth_id"`
-	Model           string  `json:"model"`
-	RequestedModel  string  `json:"requested_model,omitempty"`
-	ReasoningEffort string  `json:"reasoning_effort,omitempty"`
-	Endpoint        string  `json:"endpoint,omitempty"`
-	Headers         string  `json:"headers,omitempty"`
-	Stream          bool    `json:"stream"`
-	State           string  `json:"state,omitempty"`
-	Length          int     `json:"length"`
-	InputTokens     int64   `json:"input_tokens"`
-	OutputTokens    int64   `json:"output_tokens"`
-	ReasoningTokens int64   `json:"reasoning_tokens"`
-	TotalTokens     int64   `json:"total_tokens"`
-	TTFTSeconds     float64 `json:"ttft_seconds"`
-	LatencySeconds  float64 `json:"latency_seconds"`
-	TPS             float64 `json:"tps"`
-	Failed          bool    `json:"failed"`
-	Source          string  `json:"source,omitempty"`
-	AgeSeconds      int     `json:"age_seconds"`
+	Time             string  `json:"time"`
+	RequestID        string  `json:"request_id,omitempty"`
+	AuthID           string  `json:"auth_id"`
+	Model            string  `json:"model"`
+	RequestedModel   string  `json:"requested_model,omitempty"`
+	ReasoningEffort  string  `json:"reasoning_effort,omitempty"`
+	Endpoint         string  `json:"endpoint,omitempty"`
+	Headers          string  `json:"headers,omitempty"`
+	Stream           bool    `json:"stream"`
+	State            string  `json:"state,omitempty"`
+	Length           int     `json:"length"`
+	InputTokens      int64   `json:"input_tokens"`
+	OutputTokens     int64   `json:"output_tokens"`
+	ReasoningTokens  int64   `json:"reasoning_tokens"`
+	TotalTokens      int64   `json:"total_tokens"`
+	TTFTSeconds      float64 `json:"ttft_seconds"`
+	LatencySeconds   float64 `json:"latency_seconds"`
+	TPS              float64 `json:"tps"`
+	Failed           bool    `json:"failed"`
+	Source           string  `json:"source,omitempty"`
+	AgeSeconds       int     `json:"age_seconds"`
+	CookieNames      string  `json:"cookie_names,omitempty"`
+	CookieAgeSeconds int     `json:"cookie_age_seconds,omitempty"`
 }
 
 type statusAuth struct {
@@ -148,39 +157,65 @@ type statusAuth struct {
 	Unavailable bool   `json:"unavailable"`
 }
 
+// statusCookie describes a routing cookie without ever exposing its value: the
+// status page reports which cookies are held, how old they are and where they
+// came from, never the credential itself.
+type statusCookie struct {
+	AuthID     string `json:"auth_id"`
+	Name       string `json:"name"`
+	Length     int    `json:"length"`
+	AgeSeconds int    `json:"age_seconds"`
+	TTLSeconds int    `json:"ttl_seconds"`
+	Source     string `json:"source,omitempty"`
+	Route      string `json:"route,omitempty"`
+}
+
 type statusAccount struct {
-	AuthID       string               `json:"auth_id"`
-	Label        string               `json:"label"`
-	Color        string               `json:"color"`
-	ProbeEnabled bool                 `json:"probe_enabled"`
-	Models       []statusAccountModel `json:"models"`
+	AuthID           string               `json:"auth_id"`
+	Label            string               `json:"label"`
+	Color            string               `json:"color"`
+	ProbeEnabled     bool                 `json:"probe_enabled"`
+	CookieNames      string               `json:"cookie_names,omitempty"`
+	CookieAgeSeconds int                  `json:"cookie_age_seconds,omitempty"`
+	CookieTTLSeconds int                  `json:"cookie_ttl_seconds,omitempty"`
+	CookieSource     string               `json:"cookie_source,omitempty"`
+	CookieRoute      string               `json:"cookie_route,omitempty"`
+	Models           []statusAccountModel `json:"models"`
 }
 
 type statusAccountModel struct {
-	Model               string  `json:"model"`
-	HasState            bool    `json:"has_state"`
-	Length              int     `json:"length"`
-	Source              string  `json:"source,omitempty"`
-	State               string  `json:"state,omitempty"`
-	RemainingTTLSeconds int     `json:"remaining_ttl_seconds"`
-	ExpiresAtUnix       int64   `json:"expires_at_unix,omitempty"`
-	Requests            int64   `json:"requests"`
-	Successes           int64   `json:"successes"`
-	Failures            int64   `json:"failures"`
-	ConsecutiveFailures int     `json:"consecutive_failures"`
-	InputTokens         int64   `json:"input_tokens"`
-	OutputTokens        int64   `json:"output_tokens"`
-	ReasoningTokens     int64   `json:"reasoning_tokens"`
-	TotalTokens         int64   `json:"total_tokens"`
-	AvgTTFTSeconds      float64 `json:"avg_ttft_seconds"`
-	LastRequestAtUnix   int64   `json:"last_request_at_unix,omitempty"`
-	Injections          int64   `json:"injections"`
-	LastInjectedAtUnix  int64   `json:"last_injected_at_unix,omitempty"`
-	LastInjectedSource  string  `json:"last_injected_source,omitempty"`
-	BareRequests        int64   `json:"bare_requests"`
-	LastBareAtUnix      int64   `json:"last_bare_at_unix,omitempty"`
-	TicketEchoes        int64   `json:"ticket_echoes"`
-	TicketChanges       int64   `json:"ticket_changes"`
+	Model                 string  `json:"model"`
+	HasState              bool    `json:"has_state"`
+	Length                int     `json:"length"`
+	Source                string  `json:"source,omitempty"`
+	State                 string  `json:"state,omitempty"`
+	RemainingTTLSeconds   int     `json:"remaining_ttl_seconds"`
+	ExpiresAtUnix         int64   `json:"expires_at_unix,omitempty"`
+	Requests              int64   `json:"requests"`
+	Successes             int64   `json:"successes"`
+	Failures              int64   `json:"failures"`
+	ConsecutiveFailures   int     `json:"consecutive_failures"`
+	InputTokens           int64   `json:"input_tokens"`
+	OutputTokens          int64   `json:"output_tokens"`
+	ReasoningTokens       int64   `json:"reasoning_tokens"`
+	TotalTokens           int64   `json:"total_tokens"`
+	AvgTTFTSeconds        float64 `json:"avg_ttft_seconds"`
+	LastRequestAtUnix     int64   `json:"last_request_at_unix,omitempty"`
+	Injections            int64   `json:"injections"`
+	InjectionsWithCookie  int64   `json:"injections_with_cookie"`
+	LastInjectedAtUnix    int64   `json:"last_injected_at_unix,omitempty"`
+	LastInjectedSource    string  `json:"last_injected_source,omitempty"`
+	BareRequests          int64   `json:"bare_requests"`
+	LastBareAtUnix        int64   `json:"last_bare_at_unix,omitempty"`
+	TicketEchoes          int64   `json:"ticket_echoes"`
+	TicketChanges         int64   `json:"ticket_changes"`
+	ComboSamples          int64   `json:"combo_samples"`
+	ComboAvgSeconds       float64 `json:"combo_avg_seconds"`
+	ComboMinSeconds       float64 `json:"combo_min_seconds"`
+	ComboLastSeconds      float64 `json:"combo_last_seconds"`
+	ComboInvalidations    int64   `json:"combo_invalidations"`
+	LastInvalidatedAtUnix int64   `json:"last_invalidated_at_unix,omitempty"`
+	LastInvalidatedBy     string  `json:"last_invalidated_by,omitempty"`
 }
 
 func handleManagement(raw []byte) ([]byte, error) {
@@ -340,6 +375,12 @@ func buildStatusView() statusView {
 		Harvest:                 cfg.harvestEnabled(),
 		Probe:                   cfg.probeEnabled(),
 		DirectProbe:             cfg.directProbeEnabled(),
+		InjectCookies:           cfg.injectCookiesEnabled(),
+		HarvestCookies:          cfg.harvestCookiesEnabled(),
+		ProbeSendCookies:        cfg.probeSendCookiesEnabled(),
+		CookieTTLSeconds:        int(cfg.cookieTTL() / time.Second),
+		InvalidateOnReject:      cfg.invalidateOnRejectEnabled(),
+		StateRefreshSeconds:     cfg.StateRefreshSeconds,
 		ShowStateValues:         cfg.showStateValuesEnabled(),
 		ProbeLogLimit:           cfg.probeLogLimit(),
 		GlobalError:             visibleStatusError(snap.GlobalErr),
@@ -359,6 +400,17 @@ func buildStatusView() statusView {
 		})
 	}
 	entryByKey := make(map[cacheKey]cacheEntry, len(snap.Entries))
+	for _, cookie := range snap.Cookies {
+		view.Cookies = append(view.Cookies, statusCookie{
+			AuthID:     cookie.AuthID,
+			Name:       cookie.Name,
+			Length:     len(cookie.Value),
+			AgeSeconds: durationSeconds(snap.Now.Sub(cookie.CapturedAt)),
+			TTLSeconds: durationSeconds(snap.CookieTTL - snap.Now.Sub(cookie.CapturedAt)),
+			Source:     cookie.Source,
+			Route:      cookie.Route,
+		})
+	}
 	for _, entry := range snap.Entries {
 		entryByKey[makeCacheKey(entry.AuthID, entry.Model)] = entry
 		view.States = append(view.States, statusState{
@@ -431,27 +483,29 @@ func buildStatusView() statusView {
 			endpoint += " · 同步"
 		}
 		view.Injections = append(view.Injections, statusInjection{
-			Time:            entry.Time.Format(time.RFC3339),
-			RequestID:       entry.RequestID,
-			AuthID:          entry.AuthID,
-			Model:           entry.Model,
-			RequestedModel:  entry.RequestedModel,
-			ReasoningEffort: entry.ReasoningEffort,
-			Endpoint:        endpoint,
-			Headers:         visibleInjectionHeaders(entry.Headers, cfg),
-			Stream:          entry.Stream,
-			State:           visibleState(entry.State, cfg.showStateValuesEnabled()),
-			Length:          entry.Length,
-			InputTokens:     entry.InputTokens,
-			OutputTokens:    entry.OutputTokens,
-			ReasoningTokens: entry.ReasoningTokens,
-			TotalTokens:     entry.TotalTokens,
-			TTFTSeconds:     entry.TTFT.Seconds(),
-			LatencySeconds:  entry.Latency.Seconds(),
-			TPS:             tps,
-			Failed:          entry.Failed,
-			Source:          entry.Source,
-			AgeSeconds:      durationSeconds(snap.Now.Sub(entry.Time)),
+			Time:             entry.Time.Format(time.RFC3339),
+			RequestID:        entry.RequestID,
+			AuthID:           entry.AuthID,
+			Model:            entry.Model,
+			RequestedModel:   entry.RequestedModel,
+			ReasoningEffort:  entry.ReasoningEffort,
+			Endpoint:         endpoint,
+			Headers:          visibleInjectionHeaders(entry.Headers, cfg),
+			Stream:           entry.Stream,
+			State:            visibleState(entry.State, cfg.showStateValuesEnabled()),
+			Length:           entry.Length,
+			InputTokens:      entry.InputTokens,
+			OutputTokens:     entry.OutputTokens,
+			ReasoningTokens:  entry.ReasoningTokens,
+			TotalTokens:      entry.TotalTokens,
+			TTFTSeconds:      entry.TTFT.Seconds(),
+			LatencySeconds:   entry.Latency.Seconds(),
+			TPS:              tps,
+			Failed:           entry.Failed,
+			Source:           entry.Source,
+			AgeSeconds:       durationSeconds(snap.Now.Sub(entry.Time)),
+			CookieNames:      entry.CookieNames,
+			CookieAgeSeconds: entry.CookieAgeSeconds,
 		})
 	}
 	if files, errList := currentRuntime().host.AuthList(); errList != nil {
@@ -482,6 +536,38 @@ func buildStatusView() statusView {
 	return view
 }
 
+// fillAccountCookies mirrors the routing cookie state onto an account card. Only
+// names, ages and provenance are reported; the values never leave the jar.
+func fillAccountCookies(account *statusAccount, authID string, now time.Time, cookies []cookieEntry, ttl time.Duration) {
+	if account == nil {
+		return
+	}
+	names := make([]string, 0, len(cookies))
+	oldest := time.Duration(0)
+	for _, cookie := range cookies {
+		if cookie.AuthID != authID {
+			continue
+		}
+		names = append(names, cookie.Name)
+		if age := now.Sub(cookie.CapturedAt); age > oldest {
+			oldest = age
+		}
+		if account.CookieSource == "" {
+			account.CookieSource = cookie.Source
+		}
+		if account.CookieRoute == "" {
+			account.CookieRoute = cookie.Route
+		}
+	}
+	if len(names) == 0 {
+		return
+	}
+	sort.Strings(names)
+	account.CookieNames = strings.Join(names, ", ")
+	account.CookieAgeSeconds = durationSeconds(oldest)
+	account.CookieTTLSeconds = durationSeconds(ttl - oldest)
+}
+
 func buildAccountCards(auths []statusAuth, models []string, cfg pluginConfig, snap runtimeSnapshot, entries map[cacheKey]cacheEntry) []statusAccount {
 	allowed := cfg.authIDs()
 	accounts := make([]statusAccount, 0, len(auths))
@@ -495,27 +581,39 @@ func buildAccountCards(auths []statusAuth, models []string, cfg pluginConfig, sn
 			Color:        accountColor(auth.ID),
 			ProbeEnabled: cfg.probeAuthEnabled(auth.ID),
 		}
+		fillAccountCookies(&account, auth.ID, snap.Now, snap.Cookies, snap.CookieTTL)
 		for _, model := range models {
 			key := makeCacheKey(auth.ID, model)
 			entry, hasState := entries[key]
 			stats := snap.Windows[key]
 			counters := snap.TicketStats[key]
+			combo := snap.Combos[key]
 			modelCard := statusAccountModel{
-				Model:               model,
-				HasState:            hasState,
-				Requests:            stats.Requests,
-				Successes:           stats.Successes,
-				Failures:            stats.Failures,
-				ConsecutiveFailures: stats.ConsecutiveFailures,
-				InputTokens:         stats.InputTokens,
-				OutputTokens:        stats.OutputTokens,
-				ReasoningTokens:     stats.ReasoningTokens,
-				TotalTokens:         stats.TotalTokens,
-				Injections:          counters.Injections,
-				LastInjectedSource:  counters.LastInjectedFrom,
-				BareRequests:        counters.Bare,
-				TicketEchoes:        counters.Echoes,
-				TicketChanges:       counters.Changes,
+				Model:                model,
+				HasState:             hasState,
+				Requests:             stats.Requests,
+				Successes:            stats.Successes,
+				Failures:             stats.Failures,
+				ConsecutiveFailures:  stats.ConsecutiveFailures,
+				InputTokens:          stats.InputTokens,
+				OutputTokens:         stats.OutputTokens,
+				ReasoningTokens:      stats.ReasoningTokens,
+				TotalTokens:          stats.TotalTokens,
+				Injections:           counters.Injections,
+				InjectionsWithCookie: counters.InjectionsWithCookie,
+				LastInjectedSource:   counters.LastInjectedFrom,
+				BareRequests:         counters.Bare,
+				TicketEchoes:         counters.Echoes,
+				TicketChanges:        counters.Changes,
+				ComboSamples:         combo.LifetimeSamples,
+				ComboAvgSeconds:      combo.averageLifetime(),
+				ComboMinSeconds:      combo.MinLifetime,
+				ComboLastSeconds:     combo.LastLifetime,
+				ComboInvalidations:   combo.Invalidations,
+				LastInvalidatedBy:    combo.LastInvalidatedBy,
+			}
+			if !combo.LastInvalidatedAt.IsZero() {
+				modelCard.LastInvalidatedAtUnix = combo.LastInvalidatedAt.Unix()
 			}
 			if !counters.LastInjectedAt.IsZero() {
 				modelCard.LastInjectedAtUnix = counters.LastInjectedAt.Unix()
@@ -625,8 +723,12 @@ func renderStatusPage(view statusView, triggered bool) []byte {
 	out.WriteString(chipHTML("采集", boolLabel(view.Harvest)))
 	out.WriteString(chipHTML("探测", boolLabel(view.Probe)))
 	out.WriteString(chipHTML("直连基线", boolLabel(view.DirectProbe)))
+	out.WriteString(chipHTML("注入 Cookie", boolLabel(view.InjectCookies)))
+	out.WriteString(chipHTML("Cookie TTL", formatDuration(time.Duration(view.CookieTTLSeconds)*time.Second)))
+	out.WriteString(chipHTML("失效即失效", boolLabel(view.InvalidateOnReject)))
 	out.WriteString(chipHTML("显示 state", boolLabel(view.ShowStateValues)))
 	out.WriteString("</div>")
+	out.WriteString(writeCookieBanner(view))
 	if len(view.ExpiredStates) > 0 {
 		out.WriteString("<div class=\"banner\" style=\"border-left-color:var(--amber);background:var(--amber-bg);color:var(--amber)\">当前没有新的 292 state，以下账号仍在使用上一次成功 state 继续注入，直到拿到新的 292：")
 		for _, entry := range view.ExpiredStates {
@@ -892,6 +994,16 @@ func writeModelBlock(out *bytes.Buffer, model statusAccountModel, showState bool
 	out.WriteString("</div>")
 }
 
+// writeCookieBanner says out loud when the plugin is expected to send routing
+// cookies but has not captured any yet, because that is the difference between a
+// ticket that holds and a ticket that dies after a couple of minutes.
+func writeCookieBanner(view statusView) string {
+	if !view.InjectCookies || len(view.Cookies) > 0 {
+		return ""
+	}
+	return "<div class=\"banner\" style=\"border-left-color:var(--amber);background:var(--amber-bg);color:var(--amber)\">尚未采集到路由 Cookie（" + html.EscapeString(strings.Join(trackedCookieNames, ", ")) + "）。只有 state 被注入时，292 可能只能维持几分钟；正常跑一轮流量后这里会显示 Cookie 的名字与年龄。</div>"
+}
+
 func writeAccountRow(out *bytes.Buffer, account statusAccount, showState bool) {
 	var requests, successes, failures, tokens int64
 	ttftTotal := 0.0
@@ -910,7 +1022,17 @@ func writeAccountRow(out *bytes.Buffer, account statusAccount, showState bool) {
 	out.WriteString(html.EscapeString(account.Label))
 	out.WriteString("</span><div class=\"muted\" style=\"font-size:10.5px\">")
 	out.WriteString(html.EscapeString(account.AuthID))
-	out.WriteString("</div></td>")
+	out.WriteString("</div>")
+	if account.CookieNames != "" {
+		out.WriteString("<div class=\"muted\" style=\"font-size:10.5px\">Cookie: ")
+		out.WriteString(html.EscapeString(account.CookieNames))
+		out.WriteString(" · 龄 ")
+		out.WriteString(formatDuration(time.Duration(account.CookieAgeSeconds) * time.Second))
+		out.WriteString(" · 来源 ")
+		out.WriteString(html.EscapeString(firstNonEmpty(account.CookieSource, "-")))
+		out.WriteString("</div>")
+	}
+	out.WriteString("</td>")
 	out.WriteString("<td><div class=\"account-models\">")
 	for _, model := range account.Models {
 		requests += model.Requests
@@ -987,6 +1109,7 @@ func writeCompactModelBlock(out *bytes.Buffer, authID string, model statusAccoun
 // without one, and how the upstream answered the ticket we sent.
 func writeTicketMetrics(out *bytes.Buffer, model statusAccountModel) {
 	out.WriteString(metricHTML("已注入", fmt.Sprintf("%d", model.Injections)))
+	out.WriteString(metricHTML("带Cookie注入", fmt.Sprintf("%d", model.InjectionsWithCookie)))
 	out.WriteString(metricHTML("裸发", fmt.Sprintf("%d", model.BareRequests)))
 	out.WriteString(metricHTML("回票相同", fmt.Sprintf("%d", model.TicketEchoes)))
 	out.WriteString(metricHTML("换票", fmt.Sprintf("%d", model.TicketChanges)))
@@ -1009,6 +1132,33 @@ func writeTicketNotes(out *bytes.Buffer, model statusAccountModel) {
 		out.WriteString(" 次，不同 ")
 		out.WriteString(fmt.Sprintf("%d", model.TicketChanges))
 		out.WriteString(" 次。相同占多数说明上游会原样还票，不同占多数说明它在重新签发票。</div>")
+	}
+	if model.ComboSamples > 0 {
+		out.WriteString("<div class=\"muted\">一组（票+Cookie）实测寿命：平均 ")
+		out.WriteString(formatDuration(time.Duration(model.ComboAvgSeconds) * time.Second))
+		out.WriteString("，最短 ")
+		out.WriteString(formatDuration(time.Duration(model.ComboMinSeconds) * time.Second))
+		out.WriteString("，最近 ")
+		out.WriteString(formatDuration(time.Duration(model.ComboLastSeconds) * time.Second))
+		out.WriteString("（")
+		out.WriteString(fmt.Sprintf("%d", model.ComboSamples))
+		out.WriteString(" 次失效）。若平均寿命远低于 <code>ttl_seconds</code>，把它调小比硬撑更省事。</div>")
+	}
+	if model.ComboInvalidations > 0 && model.LastInvalidatedBy != "" {
+		out.WriteString("<div class=\"muted\">最近一次失效原因：")
+		out.WriteString(html.EscapeString(invalidationReasonText(model.LastInvalidatedBy)))
+		out.WriteString("</div>")
+	}
+}
+
+func invalidationReasonText(reason string) string {
+	switch reason {
+	case "cookie":
+		return "上游拒绝了这个 state，且 Cookie 比票更老（疑似 Cookie 先失效）"
+	case "ttl":
+		return "缓存到期（上游没有拒绝过，是 TTL 把它清掉的）"
+	default:
+		return "上游拒绝了这个 state（收到不接受的 state 形态）"
 	}
 }
 

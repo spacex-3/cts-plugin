@@ -209,6 +209,23 @@ func (c *stateCache) lookup(authID, model string) (cacheEntry, bool) {
 	return entry, true
 }
 
+// invalidate drops one cached entry on demand. The upstream refusing the ticket
+// it was just handed is a far better expiry signal than the configured TTL, and
+// it arrives on the very response that proves the ticket is dead.
+func (c *stateCache) invalidate(authID, model string) bool {
+	if c == nil {
+		return false
+	}
+	key := makeCacheKey(authID, model)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, ok := c.entries[key]; !ok {
+		return false
+	}
+	delete(c.entries, key)
+	return true
+}
+
 func (c *stateCache) snapshot() []cacheEntry {
 	if c == nil {
 		return nil

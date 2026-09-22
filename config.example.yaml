@@ -22,9 +22,13 @@ plugins:
       models:
         - "gpt-5.6-sol"
         - "gpt-6-astra"
-      interval_seconds: 1800
-      probe_schedule: "fixed"
-      probe_lead_seconds: 300
+      # 一张 292 现在只活几分钟，所以间隔默认 2 分钟、调度默认 state_aware：
+      # 只在手头这张票进入续期窗口（默认到期前 180 秒）时才真正打票。
+      interval_seconds: 120
+      probe_schedule: "state_aware"
+      probe_lead_seconds: 180
+      # 也可用「票龄超过多少秒算可续期」表达续期时机（设 0 表示不用它）：
+      state_refresh_seconds: 0
       # 可选：probe_schedule: "on_demand"，空闲时不做定时/启动探测。
       probe_wait_milliseconds: 1500
       probe_timeout_seconds: 60
@@ -39,12 +43,23 @@ plugins:
       # 11≈312 是代理/限流出口常见的形态，默认拒绝，不会顶掉你那张 292；
       # 确认 312 也正常后再写成 [10, 11, 12]。
       accepted_blocks: [10, 12]
-      ttl_seconds: 3600
+      # 实测一张 292 只维持约 200 秒，写成 1 小时只会让过期票被继续注入。
+      ttl_seconds: 300
       inject: true
       harvest: true
       probe: true
-      # 直连探测；配合空代理池即为「只用直连探测」。
+      # 直连探测（0.6 起默认开启）；配合空代理池即为「只用直连探测」。
       direct_probe: true
+      # 票与 Cookie：现在的 292 必须带账号级路由 Cookie 才能持续。
+      # 只认 __cflb / __oailb，其余 Cookie 一律不采集、不转发、不显示。
+      inject_cookies: true
+      harvest_cookies: true
+      probe_send_cookies: true
+      # 上游给了更短的 Max-Age/Expires 就按上游的算，这个值是上限。
+      cookie_ttl_seconds: 300
+      # 被注入过 state 的请求收到上游拒绝的 state（例如又回 312）时，
+      # 立即作废该缓存并触发重探；裸发请求的 312 不会误伤缓存。
+      invalidate_on_reject: true
       show_state_values: false
       show_account_details: false
       show_injection_headers: false

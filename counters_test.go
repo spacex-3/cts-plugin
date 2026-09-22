@@ -28,7 +28,7 @@ func TestTicketCountersTrackInjectionsBareAndTurnover(t *testing.T) {
 	if !ok {
 		t.Fatal("expected a cached entry")
 	}
-	r.recordInjection(pluginapi.RequestInterceptRequest{}, entry)
+	r.recordInjection(pluginapi.RequestInterceptRequest{}, entry, cookieInjection{})
 	r.recordBareRequest("auth-1", "model-1")
 
 	stats := r.snapshotStatus().TicketStats[makeCacheKey("auth-1", "model-1")]

@@ -1,6 +1,6 @@
 # Codex Turn State Probe
 
-这是一个 CLIProxyAPI 原生动态库插件：通过轮换代理主动探测 `X-Codex-Turn-State`，也可从正常 Codex 流量中自动采集；随后按“实际选中的账号 ID + 上游模型”缓存，并在 TTL 有效期内注入后续匹配请求。
+这是一个 CLIProxyAPI 原生动态库插件：通过轮换代理主动探测 `X-Codex-Turn-State`，也可从正常 Codex 流量中自动采集；随后按“实际选中的账号 ID + 上游模型”缓存，并在 TTL 有效期内注入后续匹配请求。0.6 起，注入会同时带上账号级路由 Cookie（`__cflb` / `__oailb`）——现在的 292 只带 state 已经撑不过几分钟。
 
 ## 通过 CPA 插件商店安装
 
@@ -26,7 +26,9 @@ plugins:
 - 不是在管理页面手工粘贴固定 state；而是使用轮换代理主动探测。
 - 还会从正常 HTTP、SSE、WebSocket Codex 响应自动采集。
 - 缓存键是精确的运行时账号 ID **加模型**，不会跨账号或模型共享。
-- 有形态过滤和 TTL；默认只接受 Fernet 块数 `10/12`（≈292/332），非 Fernet 退回长度 `292`，默认一小时后失效。
+- 有形态过滤和 TTL；默认只接受 Fernet 块数 `10/12`（≈292/332），非 Fernet 退回长度 `292`，默认 **5 分钟**后失效（实测一张 292 只能维持约 200 秒，写成一小时只会让过期票被继续注入）。
+- 与 state 一起采集、注入账号级路由 Cookie，并用“上游拒绝了我刚注入的 state”作为即时失效信号。
+- 状态页会给出实测的组合寿命（票 + Cookie 从开始使用到失效），可据此校准 `ttl_seconds`。
 - 缓存仅存在于 CPA 进程内，CPA 重启或插件重载后清空。
 - 管理资源用于查看脱敏状态和手动触发探测，不用于保存固定 state。
 
@@ -47,13 +49,20 @@ plugins:
       models:
         - "gpt-5.6-sol"
         - "gpt-6-astra"
-      interval_seconds: 300
+      interval_seconds: 120
       target_state_length: 292
-      ttl_seconds: 3600
+      ttl_seconds: 300
       inject: true
       harvest: true
       probe: true
       direct_probe: true
+      inject_cookies: true
+      harvest_cookies: true
+      probe_send_cookies: true
+      cookie_ttl_seconds: 300
+      invalidate_on_reject: true
+      probe_schedule: state_aware
+      probe_lead_seconds: 180
       show_state_values: false
       show_account_details: false
       show_injection_headers: false
@@ -97,16 +106,22 @@ BestGo 这类 SOCKS5 节点，条目不带协议前缀时记得把 `proxy_scheme
 - `auth_ids`：精确的 Codex 运行时账号 ID。留空表示允许所有可见 Codex 账号。
 - `probe_auth_ids`：只参与探测的账号。留空表示探测 `auth_ids` 范围内的全部账号；也可在状态页逐账号勾选并保存。
 - `models`：精确的上游模型 ID。默认是 `gpt-5.6-sol`、`gpt-6-astra`。
-- `interval_seconds`：上一轮完整探测结束后，到下一轮的等待时间。默认 `1800`，即 30 分钟。
-- `probe_schedule`：探测调度方式。`fixed` 为固定间隔；`state_aware` 在已持有新鲜 state 时跳过周期探测，等接近过期再续期。默认 `fixed`。
-- `probe_lead_seconds`：`state_aware` 模式下，在 state 过期前提前多少秒开始探测。默认 `300`。
+- `interval_seconds`：上一轮完整探测结束后，到下一轮的等待时间。默认 `120`，即 2 分钟。票只活几分钟，间隔如果还是 30 分钟，每小时会有大段时间在裸发。
+- `probe_schedule`：探测调度方式。`fixed` 为固定间隔；`state_aware` 在已持有新鲜 state 时跳过周期探测，等接近过期再续期。`on_demand` 只在有请求时探测。默认 `state_aware`。
+- `probe_lead_seconds`：`state_aware` / `on_demand` 模式下，在 state 过期前提前多少秒开始探测。默认 `180`。设为 `0` 时改用 `state_refresh_seconds`（按“票龄超过多少秒算可续期”表达）。
 - `target_state_length`：只缓存指定长度的 state。默认 `292`。
 - `accepted_blocks`：**收票门槛**。只有 Fernet 块数在这张表里的 state 才会进缓存、才会被注入。默认 `[10, 12]`：`10`≈292（Pro/Plus）、`12`≈332（Team/企业）。`11`≈312 是代理或限流出口常见的形态，**默认拒绝**——它不会顶掉你手上那张 292；确认 312 也是合格形态后再手动加成 `[10, 11, 12]`。合法 Fernet 优先按块数判断，非 Fernet 退回 `target_state_length`。探测被拒时状态页会回显实收长度与块数（例：长度 312 / 块 11），据此判断是换出口继续找还是放行这个形态。
-- `ttl_seconds`：缓存可用于注入的最长时间。默认 `3600`。
+- `ttl_seconds`：缓存可用于注入的最长时间。默认 `300`，即 5 分钟。实测一张 292 只能维持约 200 秒，因此**默认值越小越安全**：过期票继续注入只会让请求变笨，不会变好。状态页会给出实测的组合寿命，可据此调整。
 - `inject`：向后续匹配请求注入缓存。默认 `true`。
 - `harvest`：从正常 Codex 流量采集。默认 `true`。
 - `probe`：启用后台轮换代理探测。默认 `true`。
-- `direct_probe`：每个账号+模型在代理尝试前先执行不使用代理的直连请求；命中目标形态时会写入缓存并结束该轮。默认 `false`。配合空代理池即为「只用直连探测」——0.5.2 之前代理池为空会整轮跳过。
+- `direct_probe`：每个账号+模型在代理尝试前先执行不使用代理的直连请求；命中目标形态时会写入缓存并结束该轮。默认 `true`（直连正是实测能打出合格票的出口）；只用代理池时设为 `false`。配合空代理池即为「只用直连探测」——0.5.2 之前代理池为空会整轮跳过。
+- `inject_cookies`：注入 state 的同时注入账号级路由 Cookie。默认 `true`。
+- `harvest_cookies`：从上游响应（真实流量与探测）采集 `__cflb` / `__oailb`。默认 `true`。只认这两个名字，其余 Cookie 一律不看、不存、不显示。
+- `probe_send_cookies`：探测请求携带当前存活的路由 Cookie，让探测和线上流量用同一套凭据打票。默认 `true`。
+- `cookie_ttl_seconds`：路由 Cookie 的最长保存时间。默认 `300`。上游给了更短的 `Max-Age` / `Expires` 就按上游的算，这个值是上限。
+- `invalidate_on_reject`：默认 `true`。当**被注入过 state 的请求**收到上游拒绝的 state（例如又回 312）时，立即作废该缓存并触发重探。裸发请求返回的 312 不会误伤缓存。
+- `state_refresh_seconds`：票龄超过这个秒数就算“可续期”，`state_aware` / `on_demand` 会提前重探。默认 `0`，表示用 `probe_lead_seconds`。
 - `show_state_values`：在状态页和 JSON 日志中保留并显示之后捕获到的完整 state。默认 `false`；只应在受保护的管理入口启用。
 - `probe_log_limit`：内存中保留的探测日志条数。默认 `200`，最大 `1000`。
 - `max_probe_attempts`：每轮中每个账号+模型最多尝试次数。默认 `3`。
@@ -115,7 +130,17 @@ BestGo 这类 SOCKS5 节点，条目不带协议前缀时记得把 `proxy_scheme
 - `max_output_tokens`：已弃用的兼容配置。Codex 上游拒绝 token 限制参数，因此插件会忽略该项。
 - `prompt`：最小探测输入。默认 `.`。
 
-启用 `probe` 时 `proxy` 必须至少配置一条。长度不符合要求的 state 会消耗一次尝试，但不会写入缓存。
+启用 `probe` 时，`proxy` 与 `direct_probe` 至少要有一个可用出口（默认直连探测已开启）。长度不符合要求的 state 会消耗一次尝试，但不会写入缓存。
+
+### 票与 Cookie 的关系（0.6 起）
+
+实测结论（同一账号、同一出口）：票和 Cookie 是两件独立的东西，票管“资格”，Cookie 管“路由”。
+
+- 一组（票 + Cookie）的实测有效窗口只有 **约 200 秒**（连续命中到 191.7 秒，第 267 秒上游开始回 312 并断链），不是 1 小时。
+- 票与 Cookie **不需要配对**：同一个对话里换票可用，故意错配也可用。所以插件按**账号**维护一个 Cookie 池，所有模型共用最新的那一份。
+- Cookie 自己也会过期，而且很可能比票先死。插件因此分开记录票龄与 Cookie 龄，并在状态页给出“最近一次失效原因”。
+
+默认行为组合：`state_aware` 定时续期 + `invalidate_on_reject` 即时作废 + 探测携带同一套 Cookie。三者配合下，一旦上游拒绝刚注入的票，插件立刻丢弃它并重探，而不是继续拿坏票发请求到达 TTL。
 
 ## 是否会注入到当前账号后续所有 CPA 请求
 
@@ -163,11 +188,11 @@ state，本改动不加密本地存储。
 
 自动登录支持 CPA 面板的 `enc::v1::` 和 `enc::v2::` 混淆值，并优先取 `.state.managementKey`。
 
-页面顶部显示每个账号的彩色卡片，包含当前 state 长度、实时倒计时，以及当前窗口内的请求数、成功数、总 Token、平均首字时间，以及四个计数：`已注入`（请求确实带上了缓存票）、`裸发`（四道门都过了但缓存里没票，光着头发出去）、`回票相同`（上游回包里的票与手上那张完全一样）、`换票`（回包带的是另一张票）。`裸发` 大于 0 说明注入在静默失效；`回票相同` 占多数说明上游会原样还票，`换票` 占多数说明它在每轮重新签发票。下面显示最近探测和逐次代理尝试。命中目标长度的记录显示绿色，未命中或失败显示红色。页面永远不会显示代理用户名/密码或 Access Token。只有配置 `show_state_values: true` 后，后续捕获到的 state 原文才会进入页面和 JSON 日志；启用之前的记录不会恢复原文。
+页面顶部显示每个账号的彩色卡片，包含当前 state 长度、实时倒计时，以及当前窗口内的请求数、成功数、总 Token、平均首字时间，以及五个计数：`已注入`（请求确实带上了缓存票）、`带Cookie注入`（其中同时带上了路由 Cookie）、`裸发`（四道门都过了但缓存里没票，光着头发出去）、`回票相同`（上游回包里的票与手上那张完全一样）、`换票`（回包带的是另一张票）。`裸发` 大于 0 说明注入在静默失效；`带Cookie注入` 明显少于 `已注入` 说明 Cookie 没采到；`回票相同` 占多数说明上游会原样还票，`换票` 占多数说明它在每轮重新签发票。账号名下方会显示当前 Cookie 的名字、年龄与来源（**永不显示 Cookie 值**），模型卡片下方会给出实测的组合寿命与最近一次失效原因（上游拒绝 / TTL 到期 / 疑似 Cookie 先失效）。命中目标长度的记录显示绿色，未命中或失败显示红色。页面永远不会显示代理用户名/密码或 Access Token。只有配置 `show_state_values: true` 后，后续捕获到的 state 原文才会进入页面和 JSON 日志；启用之前的记录不会恢复原文。
 
-状态页顶部显示下一次定时探测倒计时，默认每 30 分钟执行一轮。探测日志支持按账号、模型和匹配结果筛选，并默认每页 10 条；注入记录同样默认每页 10 条。
+状态页顶部显示下一次定时探测倒计时，默认 `state_aware`：每 2 分钟醒一次，但只有在手头这张票进入“可续期”窗口（默认到期前 180 秒）时才真正打票。探测日志支持按账号、模型和匹配结果筛选，并默认每页 10 条；注入记录同样默认每页 10 条。
 
-插件启动时如果已经有未过期的缓存 state，会先跳过立即探测，等待下一次 30 分钟周期；只有在没有可用 state 时才会立即探测。`ttl_seconds` 是已缓存 state 可用于注入的时间，`interval_seconds` 是主动探测的间隔，两者互不影响。
+插件启动时如果已经有未过期的缓存 state，会先跳过立即探测，等待下一次周期；只有在没有可用 state 时才会立即探测。`ttl_seconds` 是已缓存 state 可用于注入的时间，`interval_seconds` 是主动探测的间隔，两者互不影响。
 
 一旦拿到过一次 292 state，即使超过 `ttl_seconds`，插件也不会主动清除；只要还没有新的 292 替换，旧 state 会继续注入，页面会以黄色提示“沿用旧 state”。只有新一次成功探测才会替换并重置倒计时。
 
@@ -186,7 +211,7 @@ us.rrp.bestgo.work:10000:USER-zone-custom-region-US:password
 
 选择协议为 `socks5` 后保存，无需改成 JSON 数组。保存内容会写入本机插件数据目录，CPA 重启后自动加载。
 
-缓存 state、探测日志、注入记录和上述计数器也会持久化到插件数据目录的 `runtime.json`，更新或重载插件后仍会恢复；此前版本升级前丢失的内存记录无法找回。
+缓存 state、路由 Cookie、探测日志、注入记录和上述计数器也会持久化到插件数据目录的 `runtime.json`，更新或重载插件后仍会恢复；文件权限为仅所有者可读写（`0600`），与 state 一样不加密。此前版本升级前丢失的内存记录无法找回。
 
 ## 排错：状态页显示“操作失败，请查看本地插件日志”
 
@@ -194,7 +219,7 @@ us.rrp.bestgo.work:10000:USER-zone-custom-region-US:password
 
 | 页面提示 | 含义与处理 |
 | --- | --- |
-| 未配置代理，且 direct_probe 未开启 | 探测需要一个出口。填代理，或把 `direct_probe` 设为 true 用直连探测。 |
+| 未配置代理，且 direct_probe 未开启 | 探测需要一个出口。填代理，或把 `direct_probe` 设为 true（0.6 起默认已开启）用直连探测。 |
 | 代理配置里没有一条能解析 | 逐行填 `host:port:user:password`（账号密码可省略），或直接粘贴 JSON 数组。写错的行会被跳过并记日志，日志里能看到第几行。 |
 | 上游返回的 state 未被接受（长度 312 / 块 11） | 这个出口给的票不在收票门槛内（默认只收 292/332）。这是**预期行为**：插件会继续用上一张合格的 292，探测会换下一条出口重试。若确认 312 也可用，把 `11` 加进 `accepted_blocks`。 |
 | 探测出口连接失败 | 代理本身不通、被限流或协议选错（BestGo 这类 SOCKS5 节点需要把 `proxy_scheme` 设为 `socks5`）。具体出口与原因见日志。 |
@@ -220,6 +245,7 @@ macOS 使用 `.dylib`，Linux 使用 `.so`，Windows 使用 `.dll`。推送 `v*`
 - 主动探测需要 CPA host API 可读取的文件型 Codex 凭据。仅存在于运行时的凭据不能直接探测，但仍可参与正常流量采集和注入。
 - 开启 `direct_probe` 后，页面会先记录一次 `direct` 直连尝试（命中即缓存并结束该轮），再记录实际发生的 `proxy` 尝试；每次代理尝试都会创建独立 uTLS HTTP/2 连接。代理池留空且开启 `direct_probe` 时即为只用直连探测。
 - 发现 state 后会立即停止读取并关闭连接；最终计费和用量仍由上游决定。
+- 只有 `__cflb` 与 `__oailb` 会被保存和转发；其余 Cookie（登录会话、统计、同意项）既不落库也不显示。Cookie 值与 state 一样属于敏感数据，状态页与 JSON 只给出名字、长度和年龄。
 - 不要设置过短的探测间隔，并遵守上游和代理服务条款。
 - state 是不透明的上游数据；长度符合要求不等于一定有效，也不保证任何路由、容量或账号效果。
 
@@ -227,7 +253,7 @@ macOS 使用 `.dylib`，Linux 使用 `.so`，Windows 使用 `.dll`。推送 `v*`
 
 ### 可选的请求驱动生命周期
 
-默认仍使用 `fixed` 定时探测和原有采集行为。按需模式及严格校验可显式开启：
+默认使用 `state_aware` 定时续期（可在配置里改回 `fixed`）。按需模式及严格校验可显式开启：
 
 ```yaml
 probe_schedule: on_demand

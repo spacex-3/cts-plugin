@@ -380,6 +380,14 @@ func (rt *pluginRuntime) probeOnce(ctx context.Context, proxyURL string, target 
 	req.Header.Set("Originator", codexOriginator)
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("Connection", "Keep-Alive")
+	// The ticket only keeps working when the account's routing cookies ride
+	// along, so a probe asks for a new ticket the same way production traffic
+	// does.
+	if cfg.probeSendCookiesEnabled() && rt.cookies != nil {
+		if live := rt.cookies.live(target.AuthID); len(live) > 0 {
+			req.Header.Set("Cookie", mergeCookieHeader("", live))
+		}
+	}
 
 	resp, errDo := rt.transport.Do(ctx, proxyURL, req)
 	if errDo != nil {
@@ -393,6 +401,9 @@ func (rt *pluginRuntime) probeOnce(ctx context.Context, proxyURL string, target 
 			rt.host.Log("debug", "codex-turn-state: close probe body failed", map[string]any{"error": errClose.Error()})
 		}
 	}()
+	// A probe is also a chance to refresh the routing cookies: a successful probe
+	// hands out the ticket and its cookie pair together.
+	rt.observeCookies(target.AuthID, "probe", probeRouteLabel(proxyURL), resp.Header)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		limited, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
 		return "", &probeFailure{status: resp.StatusCode, body: string(limited)}
@@ -411,6 +422,13 @@ func (rt *pluginRuntime) probeOnce(ctx context.Context, proxyURL string, target 
 		return "", fmt.Errorf("probe stream ended without x-codex-turn-state")
 	}
 	return state, nil
+}
+
+func probeRouteLabel(proxyURL string) string {
+	if strings.TrimSpace(proxyURL) == "" {
+		return "direct"
+	}
+	return redactProxyUser(proxyURL)
 }
 
 func (rt *pluginRuntime) listProbeTargets() ([]probeTarget, error) {
